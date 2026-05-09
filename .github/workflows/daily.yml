@@ -1,0 +1,47 @@
+name: BIP360 Daily Scraper
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Rodar scraper
+        env:
+          BIP_USER: ${{ secrets.BIP_USER }}
+          BIP_PASS: ${{ secrets.BIP_PASS }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          DEBUG_DIR: debug
+        run: python scraper.py
+
+      - name: Salvar prints de diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bip360-debug
+          path: debug/
+          if-no-files-found: ignore
+
+      - name: Notificar em caso de falha
+        if: failure()
+        run: |
+          echo "::warning::O scraper falhou. Verifique os logs acima e baixe o artifact bip360-debug."
