@@ -874,37 +874,25 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
+function renderOperatorRankingsFromSheet() {
+  const opSub = document.getElementById('operators-subtitle');
+  if (opSub && typeof getD1Label === 'function') {
+    const mLabel = typeof getMonthLabelSelected === 'function' ? getMonthLabelSelected() : selectedMonth;
+    opSub.textContent = `${mLabel} · Atualizado até ${getD1Label()} (D-1)`;
+  }
+}
 
-// ════════════════════════════════════════════════════════════════════════════
-// RANKING CHIQUINHO SORVETES — Grupo 3HAT
-// index.html — Script principal
-//
-// ESTRUTURA DOS SCRIPTS:
-//   [1] Script principal (este) — Config, dados do Sheets, dashboards individuais
-//   [2] Módulo isolado #tm-operadores-final-isolado — TM + Operadores (todas as lojas)
-//   [3] Script #login-script — Autenticação simples
-//   [4] Script #executive-multistore-js — Painel executivo multilojas
-//
-// GOOGLE SHEETS (ID: 1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY):
-//   GID_OP       154705838  → Metas Operacionais  (metas + realizado por loja/mês)
-//   GID_TMS      76128240   → Metas TM suporte    (MetaTM + RealTM por loja/mês)
-//   GID_OPERADOR 786119570  → Metas Operador suporte (vendas por operador/loja/mês)
-//
-// MAPEAMENTO DE LOJAS (STORE_MAP):
-//   sjp1=row2, ctba3=row6, ctba5=row10, cl2=row14, ctba7q=row18
-//   ctba10=row22, mga3=row26, mga5=row30, mga7=row34, mga8=row38
-//   (csvRow 0-indexed; Meta=csvRow, SuperMeta=+1, Realizado=+2)
-//
-// MAPEAMENTO DE MESES (MONTH_MAP, CSV col 0-indexed):
-//   jan=2, fev=6, mar=10, abr=14, mai=18, jun=22, jul=26, ago=30, set=34
-// ════════════════════════════════════════════════════════════════════════════
+</script>
+<script>
+
 // ── CONFIG ──────────────────────────────────────────────────────────────────
 const SHEET_ID     = '1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY';
 const SHEET_TAB    = 'Metas Operacionais';
 const SHEET_TAB_TM = 'Metas Ticket Medio';
 
 // GIDs for each tab
-const GID_OP  = '154705838';   // Metas Operacionais
+const GID_OP   = '154705838';  // Metas Operacionais
+const GID_HIST = '1927848386'; // Historico Vendas (últimos 3 meses, por dia/loja)
 const GID_TMS = '76128240';    // Metas TM suporte (clean sheet — MetaTM + RealTM)
 const GID_OPERADOR = '786119570'; // Metas Operador suporte
 
@@ -935,9 +923,10 @@ const TMS_STORE_ROW = {
 // Products at startCol+0(Shake), +1(Chantilly), +2(Água), +3(MS500)
 
 const MONTH_MAP = {
-  'jan-2026': 2,  'fev-2026': 6,  'mar-2026': 10, 'abr-2026': 14,
-  'mai-2026': 18, 'jun-2026': 22, 'jul-2026': 26, 'ago-2026': 30,
-  'set-2026': 34, 'out-2026': 38, 'nov-2026': 42, 'dez-2026': 46,
+  // 5 colunas por mês: Shake(+0), Chantilly(+1), Água(+2), MS500(+3), Canecake(+4)
+  'jan-2026': 2,  'fev-2026': 7,  'mar-2026': 12, 'abr-2026': 17,
+  'mai-2026': 22, 'jun-2026': 27, 'jul-2026': 32, 'ago-2026': 37,
+  'set-2026': 42, 'out-2026': 47, 'nov-2026': 52, 'dez-2026': 57,
 };
 
 // Ticket Médio sheet: aba "Metas Ticket Médio"
@@ -998,8 +987,9 @@ const CATS = {
   chantilly: { label:'Chantilly',      emoji:'🍰', premio:30, offset:1 },
   agua:      { label:'Água',           emoji:'💧', premio:30, offset:2 },
   milk:      { label:'Milk Shake 500', emoji:'🧋', premio:50, offset:3 },
+  canecake:  { label:'Canecake',       emoji:'🍰', premio:0,  offset:4, noMeta:true },
 };
-const CAT_KEYS = ['shake','chantilly','agua','milk'];
+const CAT_KEYS = ['shake','chantilly','agua','milk','canecake'];
 
 // ── STATE ───────────────────────────────────────────────────────────────────
 let sheetData     = null;   // raw CSV rows - Metas Operacionais
@@ -1083,6 +1073,9 @@ async function fetchSheetMetas() {
   document.getElementById('sheets-error-help').style.display = 'none';
   document.getElementById('config-note').style.display = 'none';
 
+  // Fetch histórico de vendas diárias
+  await fetchHistoricoVendas();
+
   populateMonthSelector();
 
   // Se já houver loja selecionada, renderiza automaticamente.
@@ -1144,20 +1137,21 @@ function extractStoreMetas(storeKey) {
   const realRow  = sheetData[cfg.csvRow + 2];
   if (!metaRow || !superRow) return null;
 
-  const realShake = realRow ? parseNum(realRow[startCol])   : 0;
-  const realChant = realRow ? parseNum(realRow[startCol+1]) : 0;
-  const realAgua  = realRow ? parseNum(realRow[startCol+2]) : 0;
-  const realMilk  = realRow ? parseNum(realRow[startCol+3]) : 0;
+  const realShake    = realRow ? parseNum(realRow[startCol])   : 0;
+  const realChant    = realRow ? parseNum(realRow[startCol+1]) : 0;
+  const realAgua     = realRow ? parseNum(realRow[startCol+2]) : 0;
+  const realMilk     = realRow ? parseNum(realRow[startCol+3]) : 0;
+  const realCanecake = realRow ? parseNum(realRow[startCol+4]) : 0;
 
-  // monthClosed = true when Realizado is filled in the sheet
   const monthClosed = realShake > 0 || realChant > 0 || realAgua > 0 || realMilk > 0;
 
   return {
     monthClosed,
-    shake:     { meta: parseNum(metaRow[startCol]),   super: parseNum(superRow[startCol]),   real: realShake },
-    chantilly: { meta: parseNum(metaRow[startCol+1]), super: parseNum(superRow[startCol+1]), real: realChant },
-    agua:      { meta: parseNum(metaRow[startCol+2]), super: parseNum(superRow[startCol+2]), real: realAgua  },
-    milk:      { meta: parseNum(metaRow[startCol+3]), super: parseNum(superRow[startCol+3]), real: realMilk  },
+    shake:     { meta: parseNum(metaRow[startCol]),   super: parseNum(superRow[startCol]),   real: realShake    },
+    chantilly: { meta: parseNum(metaRow[startCol+1]), super: parseNum(superRow[startCol+1]), real: realChant    },
+    agua:      { meta: parseNum(metaRow[startCol+2]), super: parseNum(superRow[startCol+2]), real: realAgua     },
+    milk:      { meta: parseNum(metaRow[startCol+3]), super: parseNum(superRow[startCol+3]), real: realMilk     },
+    canecake:  { meta: parseNum(metaRow[startCol+4]), super: parseNum(superRow[startCol+4]), real: realCanecake },
   };
 }
 
@@ -1215,7 +1209,44 @@ function calcTMBonus(storeKey, tmData) {
 }
 
 
+function extractTMData(storeKey) {
+  const data = extractTMMetas(storeKey);
+  if (!data) return null;
+  const bateuTM = data.metaTM > 0 && data.realTM >= data.metaTM;
+  const tmKnown = data.metaTM > 0 && data.realTM > 0;
+  return {
+    metaTM: data.metaTM,
+    realTM: data.realTM,
+    pctTM: data.pctTM,
+    bateuTM,
+    tmKnown
+  };
+}
 
+function calcLeadershipPrize(metas, tm) {
+  if (!tm || !tm.bateuTM) return { total: 0, bateuTM: false, breakdown: [] };
+  // Calculate what the loja earned in each operational category (not per-operator)
+  // Base = sum of operational prizes at meta level that the loja reached
+  const prizes = { shake:0, chantilly:0, agua:0, milk:0 };
+  const metaPrize = { shake:50, chantilly:30, agua:30, milk:50 };
+  const superPrize = { shake:75, chantilly:40, agua:40, milk:75 };
+  let opsTotal = 0;
+  const breakdown = [];
+  CAT_KEYS.forEach(cat => {
+    if (!metas || !metas[cat]) return;
+    const { meta, super: superMeta, real } = metas[cat];
+    const realized = real || 0;
+    if (realized >= superMeta && superMeta > 0) {
+      opsTotal += superPrize[cat];
+      breakdown.push(`${CATS[cat].emoji} SuperMeta (R$${superPrize[cat]})`);
+    } else if (realized >= meta && meta > 0) {
+      opsTotal += metaPrize[cat];
+      breakdown.push(`${CATS[cat].emoji} Meta (R$${metaPrize[cat]})`);
+    }
+  });
+  const total = Math.max(150, opsTotal * 2);
+  return { total, bateuTM: true, opsTotal, breakdown, usedMinimum: total === 150 };
+}
 
 function setStatus(type, msg) {
   const el = document.getElementById('sheets-status');
@@ -1554,17 +1585,70 @@ function renderDashboard() {
 
     const barColor = (!hasMeta) ? '#ccc' : (real >= meta ? '#4caf50' : real >= meta*0.85 ? '#FFA000' : '#ef5350');
 
+    // ── Cálculo meta/dia ──────────────────────────────────────────────
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    const daysElapsed = Math.max(1, now.getDate() - 1); // D-1
+    const daysLeft    = daysInMonth - daysElapsed;
+    const metaDay     = hasMeta ? Math.ceil(meta  / daysInMonth) : 0;
+    const superDay    = super_ > 0 ? Math.ceil(super_ / daysInMonth) : 0;
+    const faltamMes   = hasMeta ? Math.max(0, meta - real) : 0;
+    const faltamDia   = (daysLeft > 0 && faltamMes > 0) ? Math.ceil(faltamMes / daysLeft) : 0;
+
+    // ── Histórico últimos 7 dias ──────────────────────────────────────
+    const histData = (window.__histData || {})[storeKey]?.[cat] || [];
+    const hist7 = histData.slice(-7);
+
+    const histHTML = hist7.length > 0 ? (() => {
+      const maxH = Math.max(...hist7.map(h=>h.v), 1);
+      const bars = hist7.map((h,i) => {
+        const barH = Math.round((h.v/maxH)*36)+3;
+        const isPartial = i === hist7.length-1;
+        return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;">
+          <div style="font-size:9px;font-weight:700;color:${isPartial?'#999':'var(--text)'};">${h.v}</div>
+          <div style="height:${barH}px;width:100%;border-radius:2px 2px 0 0;background:${isPartial?'#ccc':'#378ADD'};"></div>
+          <div style="font-size:9px;color:var(--muted);">${h.d}</div>
+        </div>`;
+      }).join('');
+      return `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px;">
+        <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Últimos 7 dias</div>
+        <div style="display:flex;gap:3px;align-items:flex-end;">${bars}</div>
+      </div>`;
+    })() : '';
+
+    // ── Canecake: sem meta definida ───────────────────────────────────
+    const isCanecake = (info.noMeta === true);
+    const noMetaHTML = isCanecake && !hasMeta ? `
+      <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--muted);font-weight:700;margin-top:6px;">
+        Sem meta definida para este mês
+      </div>` : '';
+
     const div = document.createElement('div');
     div.className = 'team-cat';
     div.innerHTML = `
       <div class="tc-head">
         <span class="tc-emoji">${info.emoji}</span>
         <span class="tc-label">${info.label}</span>
-        <div class="tc-meta-tags">
-          ${meta  > 0 ? `<span class="tc-tag tc-tag-meta">Meta: ${meta}</span>`    : ''}
-          ${super_ > 0 ? `<span class="tc-tag tc-tag-super">Super: ${super_}</span>` : ''}
-        </div>
+        ${hasMeta ? `
+        <div style="display:flex;gap:5px;">
+          <div style="display:flex;flex-direction:column;align-items:center;background:#e3f0ff;border:0.5px solid #85B7EB;border-radius:8px;padding:4px 8px;min-width:72px;">
+            <span style="font-size:9px;font-weight:800;color:#185FA5;text-transform:uppercase;letter-spacing:.04em;">Meta</span>
+            <span style="font-size:12px;font-weight:900;color:#0C447C;">${meta}<span style="font-size:9px;font-weight:600;color:#555;">/mês</span></span>
+            <span style="font-size:10px;color:#185FA5;font-weight:700;">${metaDay}/dia</span>
+          </div>
+          ${super_ > 0 ? `<div style="display:flex;flex-direction:column;align-items:center;background:#FAEEDA;border:0.5px solid #EF9F27;border-radius:8px;padding:4px 8px;min-width:72px;">
+            <span style="font-size:9px;font-weight:800;color:#854F0B;text-transform:uppercase;letter-spacing:.04em;">SuperMeta</span>
+            <span style="font-size:12px;font-weight:900;color:#633806;">${super_}<span style="font-size:9px;font-weight:600;color:#555;">/mês</span></span>
+            <span style="font-size:10px;color:#854F0B;font-weight:700;">${superDay}/dia</span>
+          </div>` : ''}
+        </div>` : ''}
       </div>
+      ${isCanecake && !hasMeta ? `
+        <div style="font-size:22px;font-weight:900;color:var(--muted);">${real}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">vendas acumuladas</div>
+        ${noMetaHTML}
+        ${histHTML}
+      ` : `
       <div class="tc-numbers">
         <span class="tc-realized" style="color:${barColor};">${real}</span>
         <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">${isMonthClosed()?'realiz.':'acum.'}</span>
@@ -1578,11 +1662,17 @@ function renderDashboard() {
       </div>
       <div class="bar-labels">
         <span>0</span>
-        ${superMarkerPct !== null ? `<span style="color:#b8990a;">SuperMeta: ${super_}</span>` : ''}
         <span>${meta}</span>
       </div>` : ''}
-      <div class="tc-status ${statusCls}">${statusLabel}</div>
-      ${!hasMeta ? '' : real >= meta ? '' : isMonthClosed() ? `<div class="tc-remaining">Ficou ${meta - real} un. abaixo da meta neste mês.</div>` : `<div class="tc-remaining">Meta em dobro ativada quando a loja bater ${meta} un.</div>`}
+      ${faltamMes > 0 ? `
+      <div style="display:inline-flex;flex-direction:column;gap:2px;background:#FCEBEB;border:0.5px solid #F09595;border-radius:8px;padding:5px 10px;margin-top:6px;">
+        <span style="font-size:12px;font-weight:700;color:#A32D2D;">Faltam ${faltamMes.toLocaleString('pt-BR')} un./mês</span>
+        ${faltamDia > 0 ? `<span style="font-size:11px;color:#791F1F;">${faltamDia} un./dia nos próx. ${daysLeft} dias</span>` : ''}
+      </div>` : `
+      ${real >= meta && meta > 0 ? `<div class="tc-status status-meta">✓ Meta atingida!</div>` : ''}
+      `}
+      ${histHTML}
+      `}
     `;
     container.appendChild(div);
   });
@@ -1760,7 +1850,7 @@ function renderResults() {
       <td style="font-weight:900;font-size:14px;">${total}</td>
       <td>${isLeader
   ? (tmData && tmData.tmKnown && isMonthClosed()
-      ? (() => { const lp = calcTMBonus(selectedStore, tmData); return lp.bateuTM
+      ? (() => { const lp = calcLeadershipPrize(storeMetas, tmData); return lp.bateuTM
           ? `<span style="font-size:13px;font-weight:800;color:#2E7D32;">R$ ${lp.total}</span><br><span style="font-size:10px;color:var(--muted);">liderança · TM ✓</span>`
           : `<span style="font-size:11px;color:var(--muted);">TM não atingido</span>`; })()
       : '<span style="font-size:10px;color:var(--muted);">ver painel</span>')
@@ -1847,6 +1937,138 @@ if (dz) {
   updateAutomationD1Label();
   await fetchSheetMetas();
 })();
+
+function renderOperatorRankingsFromSheet() {
+  const rankingBody = document.getElementById('ranking-body');
+  const catContainer = document.getElementById('cat-rankings');
+  const results = document.getElementById('results');
+
+  if (!rankingBody || !catContainer) return;
+
+  rankingBody.innerHTML = '';
+  catContainer.innerHTML = '';
+
+  const storeKey = getSelectedStoreKey();
+  const monthKey = getSelectedMonthKey();
+
+  if (!sheetDataOperador || !storeKey || !monthKey) {
+    if (results) results.style.display = 'none';
+    return;
+  }
+
+  const rows = sheetDataOperador.slice(1);
+  const ops = {};
+
+  rows.forEach(row => {
+    const mes = row[0];
+    const loja = row[1];
+    const operador = row[2];
+
+    if (!sameMonthKey(mes, monthKey)) return;
+    if (!sameStoreKey(loja, storeKey)) return;
+    if (!operador) return;
+
+    const agua = parseNum(row[3]);
+    const chantilly = parseNum(row[4]);
+    const shake = parseNum(row[5]);
+    const milk = parseNum(row[6]);
+    const total = parseNum(row[7]) || (agua + chantilly + shake + milk);
+
+    ops[operador] = {
+      agua,
+      chantilly,
+      shake,
+      milk,
+      total
+    };
+  });
+
+  const list = Object.entries(ops)
+    .map(([name, vals]) => ({ name, ...vals }))
+    .sort((a, b) => b.total - a.total);
+
+  if (!list.length) {
+    rankingBody.innerHTML = `
+      <tr>
+        <td colspan="7" style="text-align:center;color:var(--muted);padding:18px;">
+          Nenhum operador encontrado para esta loja/mês.
+        </td>
+      </tr>`;
+    if (results) results.style.display = 'block';
+    return;
+  }
+
+  // Winners per category
+  const winners = {};
+  ['agua','chantilly','shake','milk'].forEach(cat => {
+    const ranked = [...list].filter(o => o[cat] > 0).sort((a,b) => b[cat] - a[cat]);
+    winners[cat] = ranked.length ? ranked[0].name : null;
+  });
+
+  list.forEach((op, idx) => {
+    const initials = op.name.split(/\s+/).map(p => p[0]).join('').slice(0,2).toUpperCase();
+    const tr = document.createElement('tr');
+
+    const rankClass = idx === 0 ? 'rank-1' : idx === 1 ? 'rank-2' : idx === 2 ? 'rank-3' : 'rank-n';
+
+    tr.innerHTML = `
+      <td>
+        <div class="op-name">
+          <span class="rank-badge ${rankClass}">${idx + 1}</span>
+          <span class="op-avatar">${initials}</span>
+          <span class="op-label">${op.name}</span>
+        </div>
+      </td>
+      <td><span class="qty-pill ${winners.agua === op.name ? 'qty-winner' : 'qty-normal'}">${op.agua}${winners.agua === op.name ? ' ★' : ''}</span></td>
+      <td><span class="qty-pill ${winners.chantilly === op.name ? 'qty-winner' : 'qty-normal'}">${op.chantilly}${winners.chantilly === op.name ? ' ★' : ''}</span></td>
+      <td><span class="qty-pill ${winners.shake === op.name ? 'qty-winner' : 'qty-normal'}">${op.shake}${winners.shake === op.name ? ' ★' : ''}</span></td>
+      <td><span class="qty-pill ${winners.milk === op.name ? 'qty-winner' : 'qty-normal'}">${op.milk}${winners.milk === op.name ? ' ★' : ''}</span></td>
+      <td><strong>${op.total}</strong></td>
+      <td>—</td>
+    `;
+    rankingBody.appendChild(tr);
+  });
+
+  const catInfo = [
+    ['shake', '🥤', 'Shake Mix', 'cat-shake'],
+    ['chantilly', '🍰', 'Chantilly', 'cat-chant'],
+    ['agua', '💧', 'Água', 'cat-agua'],
+    ['milk', '🧋', 'Milk Shake 500', 'cat-milk']
+  ];
+
+  catInfo.forEach(([key, emoji, label, cls]) => {
+    const ranked = [...list].sort((a,b) => b[key] - a[key]).filter(o => o[key] > 0);
+    const totalCat = ranked.reduce((s,o) => s + o[key], 0);
+
+    const card = document.createElement('div');
+    card.className = `cat-card ${cls}`;
+    card.innerHTML = `
+      <div class="cat-head">
+        <span class="cat-emoji">${emoji}</span>
+        <span>${label}</span>
+        <span class="total-badge">${totalCat}</span>
+      </div>
+      ${ranked.map((op, i) => `
+        <div class="cat-row">
+          <span class="cat-pos">${i + 1}</span>
+          <span class="cat-op">${op.name}</span>
+          ${i === 0 ? '<span class="cat-winner-flag">Líder</span>' : ''}
+          <span class="cat-qty">${op[key]}</span>
+        </div>
+      `).join('')}
+    `;
+    catContainer.appendChild(card);
+  });
+
+  const opSub = document.getElementById('operators-subtitle');
+  if (opSub && typeof getD1Label === 'function') {
+    const mLabel = typeof getMonthLabelSelected === 'function' ? getMonthLabelSelected() : selectedMonth;
+    opSub.textContent = `${mLabel} · Atualizado até ${getD1Label()} (D-1)`;
+  }
+
+  if (results) results.style.display = 'block';
+}
+
 </script>
 
 <script>
@@ -1993,6 +2215,57 @@ function renderOperatorRankingsFromSheet() {
 </script>
 
 
+// ── HISTÓRICO VENDAS ────────────────────────────────────────────────────────
+// Lê aba "Historico Vendas" e monta window.__histData[storeKey][cat] = [{d, v}]
+async function fetchHistoricoVendas() {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${GID_HIST}&cacheBust=${Date.now()}`;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    const text = await res.text();
+    if (!text || !text.includes(',')) return;
+
+    const rows = parseCSV(text).slice(1); // skip header
+    const hist = {};
+
+    // Col: A=Loja, B=Data, C=Shake, D=Chantilly, E=Água, F=MS500, G=Canecake
+    const STORE_KEYS_HIST = {
+      'sjp1':'sjp1','ctba3':'ctba3','ctba5':'ctba5','cl2':'cl2','ctba7q':'ctba7q',
+      'ctba10':'ctba10','mga3':'mga3','mga5':'mga5','mga7':'mga7','mga8':'mga8'
+    };
+    const CAT_COLS_HIST = { shake:2, chantilly:3, agua:4, milk:5, canecake:6 };
+
+    rows.forEach(row => {
+      const lojaRaw = (row[0]||'').trim();
+      const dataRaw = (row[1]||'').trim();
+      if (!lojaRaw || !dataRaw) return;
+
+      // Match loja key
+      const lojaKey = Object.keys(STORE_KEYS_HIST).find(k => lojaRaw === k) || lojaRaw;
+
+      // Format date as DD/MM
+      let dLabel = dataRaw;
+      if (dataRaw.includes('-')) {
+        const parts = dataRaw.split('-');
+        dLabel = `${parts[2]}/${parts[1]}`;
+      } else if (dataRaw.includes('/')) {
+        const parts = dataRaw.split('/');
+        dLabel = `${parts[0]}/${parts[1]}`;
+      }
+
+      if (!hist[lojaKey]) hist[lojaKey] = {};
+      Object.entries(CAT_COLS_HIST).forEach(([cat, col]) => {
+        if (!hist[lojaKey][cat]) hist[lojaKey][cat] = [];
+        hist[lojaKey][cat].push({ d: dLabel, v: parseNum(row[col]) });
+      });
+    });
+
+    window.__histData = hist;
+    console.log('[Hist] Loaded', Object.keys(hist).length, 'stores');
+  } catch(e) {
+    console.warn('[Hist] Failed to load historico:', e);
+  }
+}
+
 <script id="tm-operadores-final-isolado">
 /*
   MÓDULO FINAL ISOLADO — Ticket Médio + Operadores
@@ -2002,8 +2275,8 @@ function renderOperatorRankingsFromSheet() {
     - Metas Operador suporte: gid 786119570
 */
 (function () {
-  const GID_TM_FINAL = '76128240'; // = GID_TMS (mesma aba Metas TM suporte)
-  const GID_OPS_FINAL = '786119570'; // = GID_OPERADOR (mesma aba Metas Operador suporte)
+  const GID_TM_FINAL = '76128240';
+  const GID_OPS_FINAL = '786119570';
 
   const STORE_LABEL_FINAL = {
     cl2: 'CL 2 — City Center Outlet Campo Largo',
