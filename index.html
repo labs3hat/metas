@@ -2215,6 +2215,7 @@ function renderOperatorRankingsFromSheet() {
 </script>
 
 
+<script>
 // ── HISTÓRICO VENDAS ────────────────────────────────────────────────────────
 // Lê aba "Historico Vendas" e monta window.__histData[storeKey][cat] = [{d, v}]
 async function fetchHistoricoVendas() {
@@ -2265,6 +2266,8 @@ async function fetchHistoricoVendas() {
     console.warn('[Hist] Failed to load historico:', e);
   }
 }
+
+</script>
 
 <script id="tm-operadores-final-isolado">
 /*
