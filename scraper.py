@@ -32,7 +32,6 @@ SHEET_TAB    = "Metas Operacionais"
 SHEET_TAB_TM = "Metas TM suporte"
 SHEET_TAB_OPERADOR = "Metas Operador suporte"
 SHEET_TAB_HIST     = "Historico Vendas"
-GID_HIST           = "1927848386"
 
 # ── DATA / PERÍODO ─────────────────────────────────────────────────────────────
 # GitHub Actions roda normalmente em UTC. Para D-1 operacional do BIP360,
@@ -486,6 +485,9 @@ def normalize(text):
     text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
     return text
 
+CANECAKE_SEASONS = ["inverno", "outono", "primavera", "verao", "verão"]
+CANECAKE_FLAVORS = ["floresta negra", "merengue limao", "merengue morango", "smores", "s mores", "torta de morango"]
+
 def classify(produto: str) -> str | None:
     p = str(produto or "").strip()
     n = normalize(p)
@@ -494,7 +496,7 @@ def classify(produto: str) -> str | None:
     if "agua" in n:
         return "agua"
 
-    # Chantilly — somente adicionais
+    # Chantilly — somente adicionais (Ad Chantilly)
     if "chantilly" in n and re.search(r"\bad\b", n):
         return "chantilly"
 
@@ -506,7 +508,19 @@ def classify(produto: str) -> str | None:
     if ("milk shake" in n or "cafe shake" in n) and "500" in n:
         return "milk"
 
-    if "Canecake" in p or "canecake" in p or "CANECAKE" in p:
+    # Canecake 2026
+    # Regras:
+    # 1. Deve conter "canecake 2026"
+    # 2. Deve conter uma estação do ano
+    # 3. Se contiver "ad " no início ou " ad " = é adicional → EXCLUIR
+    if "canecake 2026" in n:
+        # Excluir adicionais: "ad " no nome
+        if re.search(r"\bad\b", n):
+            return None
+        # Deve ter estação do ano
+        has_season = any(s in n for s in CANECAKE_SEASONS)
+        if not has_season:
+            return None
         return "canecake"
 
     return None
@@ -514,7 +528,8 @@ def classify(produto: str) -> str | None:
 
 # ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
 def get_month_start_col(month: int) -> int:
-    # 1-indexed: Jan=C=3, Fev=H=8, Mar=M=13... (5 cols per month: Shake,Chantilly,Agua,MS500,Canecake)
+    # 1-indexed: Jan=C=3, Fev=G=7, Mar=K=11...
+    # 5 colunas por mês: Shake, Chantilly, Água, MS500, Canecake
     return 3 + (month - 1) * 5
 
 
@@ -556,6 +571,7 @@ def get_sheet_operador():
     return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB_OPERADOR)
 
 def get_sheet_hist():
+    """Connect to Historico Vendas sheet."""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -565,50 +581,72 @@ def get_sheet_hist():
     return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB_HIST)
 
 
-def update_historico(ws_hist, store_key: str, totals: dict):
-    """Append today's (D-1) totals to Historico Vendas.
-    Keeps only last 3 months of data.
-    Cols: Loja | Data | Shake Mix | Chantilly | Água | MS 500ml | Canecake
+def get_existing_hist_dates(ws_hist) -> set:
+    """Return set of (store_key, date_str) already in Historico Vendas.
+    date_str format: DD/MM/YYYY
     """
-    from datetime import timedelta
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
-
-    # Read existing data
     existing = ws_hist.get_all_values()
-    header = existing[0] if existing else ["Loja","Data","Quantidade Shake Mix","Quantidade Chantilly","Quantidade Água","Quantidade MS 500ml","Canecake"]
-    data_rows = existing[1:] if len(existing) > 1 else []
+    result = set()
+    for row in existing[1:]:  # skip header
+        if len(row) >= 2 and row[0] and row[1]:
+            result.add((row[0].strip(), row[1].strip()))
+    return result
 
-    # Remove old entry for same store+date if exists (idempotent)
-    data_rows = [r for r in data_rows if not (len(r) > 1 and r[0] == store_key and r[1] == yesterday)]
 
-    # Add new row
+def update_historico_day(ws_hist, store_key: str, date_str: str, totals: dict, existing_dates: set):
+    """Append one day's totals for one store to Historico Vendas.
+    Skips if already exists. date_str = DD/MM/YYYY
+    """
+    if (store_key, date_str) in existing_dates:
+        print(f"  ↷ Histórico {store_key} {date_str} já existe — pulando")
+        return False
+
     new_row = [
         store_key,
-        yesterday,
+        date_str,
         int(totals.get("shake", 0) or 0),
         int(totals.get("chantilly", 0) or 0),
         int(totals.get("agua", 0) or 0),
         int(totals.get("milk", 0) or 0),
         int(totals.get("canecake", 0) or 0),
     ]
-    data_rows.append(new_row)
+    ws_hist.append_row(new_row, value_input_option="RAW")
+    existing_dates.add((store_key, date_str))
+    print(f"  → Histórico {store_key} {date_str}: shake={new_row[2]} chant={new_row[3]} agua={new_row[4]} milk={new_row[5]} canecake={new_row[6]}")
+    return True
 
-    # Keep only last 3 months (approx 92 days × 10 stores = 920 rows max)
-    cutoff = datetime.now() - timedelta(days=92)
-    def parse_date(r):
+
+def prune_old_hist(ws_hist):
+    """Keep only last 7 days in Historico Vendas. Called once at end of run."""
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(days=7)
+
+    existing = ws_hist.get_all_values()
+    if not existing:
+        return
+
+    header = existing[0]
+    data_rows = existing[1:]
+
+    def parse_date(row):
         try:
-            d, m, y = r[1].split("/")
+            d, m, y = row[1].split("/")
             return datetime(int(y), int(m), int(d))
-        except:
+        except Exception:
             return datetime.now()
 
-    data_rows = [r for r in data_rows if parse_date(r) >= cutoff]
-    data_rows.sort(key=lambda r: (r[0], r[1]))  # sort by store, date
+    kept = [r for r in data_rows if parse_date(r) > cutoff]
 
-    final_values = [header] + data_rows
+    if len(kept) == len(data_rows):
+        print(f"  Histórico: {len(kept)} linhas, nenhuma removida")
+        return
+
+    final_values = [header] + kept
     ws_hist.clear()
     ws_hist.update("A1", final_values, value_input_option="RAW")
-    print(f"  → {store_key} histórico: {yesterday} gravado ({len(data_rows)} linhas totais)")
+    removed = len(data_rows) - len(kept)
+    print(f"  Histórico: {removed} linhas antigas removidas, {len(kept)} mantidas")
+
 
 
 
@@ -1263,6 +1301,46 @@ def download_xls(page, store: dict, download_dir: str) -> str | None:
 
 
 
+
+def download_xls_daterange(page, store: dict, download_dir: str, day_start: str, day_end: str, suffix: str = "") -> str | None:
+    """Download XLS for a specific date range (used for daily historico)."""
+    go_to_report(page)
+
+    print(f"  Setting dates: {day_start} → {day_end}")
+    try:
+        set_report_dates(page, day_start, day_end)
+    except Exception:
+        save_debug(page, f"hist_date_fields_{store['key']}{suffix}")
+        raise
+
+    time.sleep(0.5)
+    click_pesquisar(page)
+
+    wait_bip_idle(page, timeout=45)
+
+    # Check if there are results
+    state = page.evaluate("""() => {
+        const body = document.body.innerText || '';
+        const hasXls = !!document.querySelector('img[src*="xls" i]');
+        const hasNoRecords = body.toLowerCase().includes('nenhum registro');
+        return {hasXls, hasNoRecords};
+    }""")
+
+    if state.get("hasNoRecords") and not state.get("hasXls"):
+        print(f"  ↷ Sem vendas neste dia")
+        return None
+
+    try:
+        download = click_xls_export(page)
+    except Exception:
+        print(f"  ⚠️ XLS não encontrado para {day_start}")
+        return None
+
+    file_path = os.path.join(download_dir, f"{store['key']}{suffix}.xls")
+    download.save_as(file_path)
+    return file_path
+
+
 def go_to_tm_report(page):
     """Open Ticket Médio Diário report."""
     print("  Opening Ticket Médio Diário report...")
@@ -1817,6 +1895,16 @@ def main():
     print(f"Google Sheets connected. Report month: {MESES_PT[report_month]}-{report_year}")
     print(f"Report period D-1 (BRT): {start_date_dbg} → {end_date_dbg}")
 
+    # Load existing historico dates once (avoid repeated reads per store)
+    existing_hist_dates = get_existing_hist_dates(ws_hist)
+    print(f"Histórico: {len(existing_hist_dates)} entradas existentes")
+
+    # Build list of last 7 days (D-1 to D-7) in DD/MM/YYYY
+    from datetime import timedelta
+    now_brt = datetime.now()
+    hist_days = [(now_brt - timedelta(days=i)).strftime("%d/%m/%Y") for i in range(1, 8)]
+    print(f"Dias a verificar: {hist_days}")
+
     success_count = 0
     error_count = 0
 
@@ -1850,7 +1938,25 @@ def main():
 
                     update_realizado(ws_gsheet, store["key"], totals)
                     update_operadores(ws_op, store["key"], operators)
-                    update_historico(ws_hist, store["key"], totals)
+
+                    # ── Historico Vendas: download dia a dia ──────────────
+                    for hist_date in hist_days:
+                        if (store["key"], hist_date) in existing_hist_dates:
+                            print(f"  ↷ {store['key']} {hist_date} já existe")
+                            continue
+                        # Parse hist_date to set exact day range
+                        hd, hm, hy = hist_date.split("/")
+                        day_start = f"{hd}/{hm}/{hy} 00:00:00"
+                        day_end   = f"{hd}/{hm}/{hy} 23:59:59"
+                        print(f"  📅 Baixando histórico {store['key']} {hist_date}...")
+                        try:
+                            hist_file = download_xls_daterange(page, store, tmpdir, day_start, day_end, suffix=f"_hist_{hd}{hm}")
+                            if hist_file and os.path.exists(hist_file):
+                                _, hist_ops = parse_xls_by_operator(hist_file)
+                                hist_totals = {cat: sum(op.get(cat,0) for op in hist_ops.values()) for cat in ["shake","chantilly","agua","milk","canecake"]}
+                                update_historico_day(ws_hist, store["key"], hist_date, hist_totals, existing_hist_dates)
+                        except Exception as he:
+                            print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
 
                     # Ticket Médio Diário → aba Metas TM suporte
                     tm_file_path = download_tm_xls(page, store, tmpdir)
@@ -1879,6 +1985,12 @@ def main():
                         context.close()
 
             browser.close()
+
+    # Prune historico to keep only last 7 days
+    try:
+        prune_old_hist(ws_hist)
+    except Exception as pe:
+        print(f"  ⚠️ Prune historico falhou: {pe}")
 
     print(f"\n=== Done! Success: {success_count} | Errors: {error_count} ===")
 
