@@ -635,7 +635,7 @@ def prune_old_hist(ws_hist):
         except Exception:
             return datetime.now()
 
-    kept = [r for r in data_rows if parse_date(r) > cutoff]
+    kept = [r for r in data_rows if parse_date(r) >= cutoff]
 
     if len(kept) == len(data_rows):
         print(f"  Histórico: {len(kept)} linhas, nenhuma removida")
@@ -1586,7 +1586,7 @@ def parse_xls_by_operator(file_path: str, store_key: str = "") -> tuple[dict, di
       - salva CSV de diagnóstico;
       - evita linhas idênticas duplicadas dentro do mesmo XLS.
     """
-    totals = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0}
+    totals = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0}
     operators = {}
     debug_rows = []
     seen_rows = set()
@@ -1693,7 +1693,7 @@ def parse_xls_by_operator(file_path: str, store_key: str = "") -> tuple[dict, di
             seen_rows.add(row_key)
 
             if operador not in operators:
-                operators[operador] = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "total": 0}
+                operators[operador] = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0, "total": 0}
 
             operators[operador][cat] += qty
             operators[operador]["total"] += qty
@@ -1830,7 +1830,7 @@ def update_operadores(ws_op, store_key: str, operators: dict):
 
 
 def parse_xls(file_path: str) -> dict:
-    totals = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0}
+    totals = {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0}
 
     try:
         wb = xlrd.open_workbook(file_path)
