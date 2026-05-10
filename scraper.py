@@ -31,6 +31,8 @@ SHEET_ID     = "1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY"
 SHEET_TAB    = "Metas Operacionais"
 SHEET_TAB_TM = "Metas TM suporte"
 SHEET_TAB_OPERADOR = "Metas Operador suporte"
+SHEET_TAB_HIST     = "Historico Vendas"
+GID_HIST           = "1927848386"
 
 # ── DATA / PERÍODO ─────────────────────────────────────────────────────────────
 # GitHub Actions roda normalmente em UTC. Para D-1 operacional do BIP360,
@@ -232,7 +234,7 @@ TM_STORE_SHEET_ROW = {
 }
 
 
-CAT_OFFSET = {"shake": 0, "chantilly": 1, "agua": 2, "milk": 3}
+CAT_OFFSET = {"shake": 0, "chantilly": 1, "agua": 2, "milk": 3, "canecake": 4}
 
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -504,13 +506,16 @@ def classify(produto: str) -> str | None:
     if ("milk shake" in n or "cafe shake" in n) and "500" in n:
         return "milk"
 
+    if "Canecake" in p or "canecake" in p or "CANECAKE" in p:
+        return "canecake"
+
     return None
 
 
 # ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
 def get_month_start_col(month: int) -> int:
-    # 1-indexed: Jan=C=3, Fev=G=7, Mar=K=11...
-    return 3 + (month - 1) * 4
+    # 1-indexed: Jan=C=3, Fev=H=8, Mar=M=13... (5 cols per month: Shake,Chantilly,Agua,MS500,Canecake)
+    return 3 + (month - 1) * 5
 
 
 def get_tm_month_meta_col(month: int) -> int:
@@ -549,6 +554,62 @@ def get_sheet_operador():
     creds = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB_OPERADOR)
+
+def get_sheet_hist():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(GOOGLE_CREDS, scopes=scopes)
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB_HIST)
+
+
+def update_historico(ws_hist, store_key: str, totals: dict):
+    """Append today's (D-1) totals to Historico Vendas.
+    Keeps only last 3 months of data.
+    Cols: Loja | Data | Shake Mix | Chantilly | Água | MS 500ml | Canecake
+    """
+    from datetime import timedelta
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+
+    # Read existing data
+    existing = ws_hist.get_all_values()
+    header = existing[0] if existing else ["Loja","Data","Quantidade Shake Mix","Quantidade Chantilly","Quantidade Água","Quantidade MS 500ml","Canecake"]
+    data_rows = existing[1:] if len(existing) > 1 else []
+
+    # Remove old entry for same store+date if exists (idempotent)
+    data_rows = [r for r in data_rows if not (len(r) > 1 and r[0] == store_key and r[1] == yesterday)]
+
+    # Add new row
+    new_row = [
+        store_key,
+        yesterday,
+        int(totals.get("shake", 0) or 0),
+        int(totals.get("chantilly", 0) or 0),
+        int(totals.get("agua", 0) or 0),
+        int(totals.get("milk", 0) or 0),
+        int(totals.get("canecake", 0) or 0),
+    ]
+    data_rows.append(new_row)
+
+    # Keep only last 3 months (approx 92 days × 10 stores = 920 rows max)
+    cutoff = datetime.now() - timedelta(days=92)
+    def parse_date(r):
+        try:
+            d, m, y = r[1].split("/")
+            return datetime(int(y), int(m), int(d))
+        except:
+            return datetime.now()
+
+    data_rows = [r for r in data_rows if parse_date(r) >= cutoff]
+    data_rows.sort(key=lambda r: (r[0], r[1]))  # sort by store, date
+
+    final_values = [header] + data_rows
+    ws_hist.clear()
+    ws_hist.update("A1", final_values, value_input_option="RAW")
+    print(f"  → {store_key} histórico: {yesterday} gravado ({len(data_rows)} linhas totais)")
+
 
 
 def update_realizado(ws_gsheet, store_key: str, totals: dict):
@@ -1750,6 +1811,7 @@ def main():
     ws_gsheet = get_sheet()
     ws_tm = get_sheet_tm()
     ws_op = get_sheet_operador()
+    ws_hist = get_sheet_hist()
     report_month, report_year = get_report_month_info()
     start_date_dbg, end_date_dbg = get_report_date_strings(include_seconds=True)
     print(f"Google Sheets connected. Report month: {MESES_PT[report_month]}-{report_year}")
@@ -1788,6 +1850,7 @@ def main():
 
                     update_realizado(ws_gsheet, store["key"], totals)
                     update_operadores(ws_op, store["key"], operators)
+                    update_historico(ws_hist, store["key"], totals)
 
                     # Ticket Médio Diário → aba Metas TM suporte
                     tm_file_path = download_tm_xls(page, store, tmpdir)
