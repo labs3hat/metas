@@ -618,7 +618,14 @@ def save_hist_data(ws_hist, header: list, data_rows: list):
     removed = len(data_rows) - len(kept)
 
     # Sort by loja then date for readability
-    kept.sort(key=lambda r: (r[0], r[1]))
+    # Sort by loja then date (parse date for correct chronological order)
+    def sort_key(r):
+        try:
+            d, m, y = str(r[1]).strip().split("/")
+            return (r[0], int(y), int(m), int(d))
+        except Exception:
+            return (r[0], 0, 0, 0)
+    kept.sort(key=sort_key)
 
     final_values = [header] + kept
     ws_hist.clear()
