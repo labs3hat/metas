@@ -581,21 +581,59 @@ def get_sheet_hist():
     return gc.open_by_key(SHEET_ID).worksheet(SHEET_TAB_HIST)
 
 
-def get_existing_hist_dates(ws_hist) -> set:
-    """Return set of (store_key, date_str) already in Historico Vendas.
-    date_str format: DD/MM/YYYY
+def load_hist_data(ws_hist) -> tuple:
+    """Load Historico Vendas sheet into memory.
+    Returns (header, data_rows, existing_dates_set).
+    All modifications are done in memory; call save_hist_data() to persist.
     """
-    existing = ws_hist.get_all_values()
-    result = set()
-    for row in existing[1:]:  # skip header
-        if len(row) >= 2 and row[0] and row[1]:
-            result.add((row[0].strip(), row[1].strip()))
-    return result
+    all_rows = ws_hist.get_all_values()
+    if not all_rows:
+        header = ["Loja","Data","Quantidade Shake Mix","Quantidade Chantilly",
+                  "Quantidade Água","Quantidade MS 500ml","Canecake"]
+        return header, [], set()
+
+    header = all_rows[0]
+    data_rows = [list(r) for r in all_rows[1:] if len(r) >= 2 and r[0] and r[1]]
+    existing_dates = {(r[0].strip(), r[1].strip()) for r in data_rows}
+    return header, data_rows, existing_dates
 
 
-def update_historico_day(ws_hist, store_key: str, date_str: str, totals: dict, existing_dates: set):
-    """Append one day's totals for one store to Historico Vendas.
-    Skips if already exists. date_str = DD/MM/YYYY
+def save_hist_data(ws_hist, header: list, data_rows: list):
+    """Write all historico data to sheet in one batch operation.
+    Prunes rows older than D-7 before writing.
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    cutoff_date = today - timedelta(days=7)  # D-7 inclusive
+
+    def parse_date(row):
+        try:
+            d, m, y = str(row[1]).strip().split("/")
+            return date(int(y), int(m), int(d))
+        except Exception:
+            return today  # keep rows with unparseable dates
+
+    kept = [r for r in data_rows if parse_date(r) >= cutoff_date]
+    removed = len(data_rows) - len(kept)
+
+    # Sort by loja then date for readability
+    kept.sort(key=lambda r: (r[0], r[1]))
+
+    final_values = [header] + kept
+    ws_hist.clear()
+    if len(final_values) > 1:
+        ws_hist.update("A1", final_values, value_input_option="RAW")
+
+    print(f"  Histórico salvo: {len(kept)} linhas" +
+          (f" ({removed} antigas removidas)" if removed else ""))
+
+
+def add_hist_row(data_rows: list, existing_dates: set,
+                 store_key: str, date_str: str, totals: dict) -> bool:
+    """Add one day+store row to the in-memory data_rows list.
+    Skips if already exists. No API call — call save_hist_data() later.
+    date_str = DD/MM/YYYY
     """
     if (store_key, date_str) in existing_dates:
         print(f"  ↷ Histórico {store_key} {date_str} já existe — pulando")
@@ -610,42 +648,14 @@ def update_historico_day(ws_hist, store_key: str, date_str: str, totals: dict, e
         int(totals.get("milk", 0) or 0),
         int(totals.get("canecake", 0) or 0),
     ]
-    ws_hist.append_row(new_row, value_input_option="RAW")
+    data_rows.append(new_row)
     existing_dates.add((store_key, date_str))
-    print(f"  → Histórico {store_key} {date_str}: shake={new_row[2]} chant={new_row[3]} agua={new_row[4]} milk={new_row[5]} canecake={new_row[6]}")
+    print(f"  → Histórico {store_key} {date_str}: "
+          f"shake={new_row[2]} chant={new_row[3]} agua={new_row[4]} "
+          f"milk={new_row[5]} canecake={new_row[6]}")
     return True
 
 
-def prune_old_hist(ws_hist):
-    """Keep only last 7 days in Historico Vendas. Called once at end of run."""
-    from datetime import timedelta
-    cutoff = datetime.now() - timedelta(days=7)
-
-    existing = ws_hist.get_all_values()
-    if not existing:
-        return
-
-    header = existing[0]
-    data_rows = existing[1:]
-
-    def parse_date(row):
-        try:
-            d, m, y = row[1].split("/")
-            return datetime(int(y), int(m), int(d))
-        except Exception:
-            return datetime.now()
-
-    kept = [r for r in data_rows if parse_date(r) >= cutoff]
-
-    if len(kept) == len(data_rows):
-        print(f"  Histórico: {len(kept)} linhas, nenhuma removida")
-        return
-
-    final_values = [header] + kept
-    ws_hist.clear()
-    ws_hist.update("A1", final_values, value_input_option="RAW")
-    removed = len(data_rows) - len(kept)
-    print(f"  Histórico: {removed} linhas antigas removidas, {len(kept)} mantidas")
 
 
 
@@ -1895,12 +1905,12 @@ def main():
     print(f"Google Sheets connected. Report month: {MESES_PT[report_month]}-{report_year}")
     print(f"Report period D-1 (BRT): {start_date_dbg} → {end_date_dbg}")
 
-    # Load existing historico dates once (avoid repeated reads per store)
-    existing_hist_dates = get_existing_hist_dates(ws_hist)
-    print(f"Histórico: {len(existing_hist_dates)} entradas existentes")
+    # Load entire historico into memory — single API read
+    hist_header, hist_data_rows, existing_hist_dates = load_hist_data(ws_hist)
+    print(f"Histórico: {len(hist_data_rows)} linhas existentes, {len(existing_hist_dates)} combinações loja+data")
 
     # Build list of last 7 days (D-1 to D-7) in DD/MM/YYYY
-    from datetime import timedelta
+    from datetime import timedelta, date as date_type
     now_brt = datetime.now()
     hist_days = [(now_brt - timedelta(days=i)).strftime("%d/%m/%Y") for i in range(1, 8)]
     print(f"Dias a verificar: {hist_days}")
@@ -1939,12 +1949,11 @@ def main():
                     update_realizado(ws_gsheet, store["key"], totals)
                     update_operadores(ws_op, store["key"], operators)
 
-                    # ── Historico Vendas: download dia a dia ──────────────
+                    # ── Historico Vendas: download dia a dia (in-memory) ──
                     for hist_date in hist_days:
                         if (store["key"], hist_date) in existing_hist_dates:
                             print(f"  ↷ {store['key']} {hist_date} já existe")
                             continue
-                        # Parse hist_date to set exact day range
                         hd, hm, hy = hist_date.split("/")
                         day_start = f"{hd}/{hm}/{hy} 00:00:00"
                         day_end   = f"{hd}/{hm}/{hy} 23:59:59"
@@ -1954,7 +1963,11 @@ def main():
                             if hist_file and os.path.exists(hist_file):
                                 _, hist_ops = parse_xls_by_operator(hist_file)
                                 hist_totals = {cat: sum(op.get(cat,0) for op in hist_ops.values()) for cat in ["shake","chantilly","agua","milk","canecake"]}
-                                update_historico_day(ws_hist, store["key"], hist_date, hist_totals, existing_hist_dates)
+                                add_hist_row(hist_data_rows, existing_hist_dates, store["key"], hist_date, hist_totals)
+                            else:
+                                # No sales this day — record zeros so we don't retry
+                                add_hist_row(hist_data_rows, existing_hist_dates, store["key"], hist_date,
+                                             {"shake":0,"chantilly":0,"agua":0,"milk":0,"canecake":0})
                         except Exception as he:
                             print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
 
@@ -1986,11 +1999,11 @@ def main():
 
             browser.close()
 
-    # Prune historico to keep only last 7 days
+    # Persist all historico changes in one batch write (prune + save)
     try:
-        prune_old_hist(ws_hist)
+        save_hist_data(ws_hist, hist_header, hist_data_rows)
     except Exception as pe:
-        print(f"  ⚠️ Prune historico falhou: {pe}")
+        print(f"  ⚠️ Save historico falhou: {pe}")
 
     print(f"\n=== Done! Success: {success_count} | Errors: {error_count} ===")
 
