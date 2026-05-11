@@ -1605,7 +1605,7 @@ function renderDashboard() {
         const barH = Math.round((h.v/maxH)*36)+3;
         return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;">
           <div style="font-size:9px;font-weight:700;color:var(--text);">${h.v}</div>
-          <div style="height:${barH}px;width:100%;border-radius:2px 2px 0 0;background:'#378ADD';"></div>
+          <div style="height:${barH}px;width:100%;border-radius:2px 2px 0 0;background:#378ADD;"></div>
           <div style="font-size:9px;color:var(--muted);">${h.d}</div>
         </div>`;
       }).join('');
