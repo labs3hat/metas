@@ -2255,10 +2255,22 @@ async function fetchHistoricoVendas() {
       if (!hist[lojaKey]) hist[lojaKey] = {};
       Object.entries(CAT_COLS_HIST).forEach(([cat, col]) => {
         if (!hist[lojaKey][cat]) hist[lojaKey][cat] = [];
-        hist[lojaKey][cat].push({ d: dLabel, v: parseNum(row[col]) });
+        hist[lojaKey][cat].push({ d: dLabel, v: parseNum(row[col]), raw: row[1] });
       });
     });
 
+    // Sort each store+cat by date chronologically (DD/MM/YYYY)
+    Object.values(hist).forEach(storeCats => {
+      Object.values(storeCats).forEach(arr => {
+        arr.sort((a, b) => {
+          const [da,ma,ya] = a.raw.split('/').map(Number);
+          const [db,mb,yb] = b.raw.split('/').map(Number);
+          return new Date(ya,ma-1,da) - new Date(yb,mb-1,db);
+        });
+        // Remove the raw field after sorting
+        arr.forEach(item => delete item.raw);
+      });
+    });
     window.__histData = hist;
     console.log('[Hist] Loaded', Object.keys(hist).length, 'stores');
   } catch(e) {
