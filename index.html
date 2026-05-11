@@ -644,9 +644,9 @@
   }
 
   .ranking-table td:nth-child(2)::before { content: "💧 Água"; font-weight: bold; }
-  .ranking-table td:nth-child(3)::before { content: "🍰 Chantilly"; font-weight: bold; }
+  .ranking-table td:nth-child(3)::before { content: "🍦 Chantilly"; font-weight: bold; }
   .ranking-table td:nth-child(4)::before { content: "🥤 Shake"; font-weight: bold; }
-  .ranking-table td:nth-child(5)::before { content: "🧋 Milk"; font-weight: bold; }
+  .ranking-table td:nth-child(5)::before { content: "🥛 Milk"; font-weight: bold; }
   .ranking-table td:nth-child(6)::before { content: "Total"; font-weight: bold; }
   .ranking-table td:nth-child(7)::before { content: "Prêmio"; font-weight: bold; }
 }
@@ -835,9 +835,9 @@
           <tr>
             <th>Operador</th>
             <th>💧 Água</th>
-            <th>🍰 Chantilly</th>
+            <th>🍦 Chantilly</th>
             <th>🥤 Shake Mix</th>
-            <th>🧋 Milk Shake 500</th>
+            <th>🥛 Milk Shake 500</th>
             <th>Total</th>
             <th>Prêmio est.</th>
           </tr>
@@ -984,10 +984,10 @@ const STORE_MAP = {
 
 const CATS = {
   shake:     { label:'Shake Mix',      emoji:'🥤', premio:50, offset:0 },
-  chantilly: { label:'Chantilly',      emoji:'🍰', premio:30, offset:1 },
+  chantilly: { label:'Chantilly',      emoji:'🍦', premio:30, offset:1 },
   agua:      { label:'Água',           emoji:'💧', premio:30, offset:2 },
-  milk:      { label:'Milk Shake 500', emoji:'🧋', premio:50, offset:3 },
-  canecake:  { label:'Canecake',       emoji:'🍰', premio:0,  offset:4, noMeta:true },
+  milk:      { label:'Milk Shake 500', emoji:'🥛', premio:50, offset:3 },
+  canecake:  { label:'Canecake',       emoji:'🧁', premio:0,  offset:4, noMeta:true },
 };
 const CAT_KEYS = ['shake','chantilly','agua','milk','canecake'];
 
@@ -1603,10 +1603,9 @@ function renderDashboard() {
       const maxH = Math.max(...hist7.map(h=>h.v), 1);
       const bars = hist7.map((h,i) => {
         const barH = Math.round((h.v/maxH)*36)+3;
-        const isPartial = i === hist7.length-1;
         return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;">
-          <div style="font-size:9px;font-weight:700;color:${isPartial?'#999':'var(--text)'};">${h.v}</div>
-          <div style="height:${barH}px;width:100%;border-radius:2px 2px 0 0;background:${isPartial?'#ccc':'#378ADD'};"></div>
+          <div style="font-size:9px;font-weight:700;color:var(--text);">${h.v}</div>
+          <div style="height:${barH}px;width:100%;border-radius:2px 2px 0 0;background:'#378ADD';"></div>
           <div style="font-size:9px;color:var(--muted);">${h.d}</div>
         </div>`;
       }).join('');
@@ -1633,12 +1632,12 @@ function renderDashboard() {
         <div style="display:flex;gap:5px;">
           <div style="display:flex;flex-direction:column;align-items:center;background:#e3f0ff;border:0.5px solid #85B7EB;border-radius:8px;padding:4px 8px;min-width:72px;">
             <span style="font-size:9px;font-weight:800;color:#185FA5;text-transform:uppercase;letter-spacing:.04em;">Meta</span>
-            <span style="font-size:12px;font-weight:900;color:#0C447C;">${meta}<span style="font-size:9px;font-weight:600;color:#555;">/mês</span></span>
+            <span style="font-size:12px;font-weight:900;color:#0C447C;">${meta}<span style="font-size:9px;font-weight:800;color:#185FA5;">/mês</span></span>
             <span style="font-size:10px;color:#185FA5;font-weight:700;">${metaDay}/dia</span>
           </div>
           ${super_ > 0 ? `<div style="display:flex;flex-direction:column;align-items:center;background:#FAEEDA;border:0.5px solid #EF9F27;border-radius:8px;padding:4px 8px;min-width:72px;">
             <span style="font-size:9px;font-weight:800;color:#854F0B;text-transform:uppercase;letter-spacing:.04em;">SuperMeta</span>
-            <span style="font-size:12px;font-weight:900;color:#633806;">${super_}<span style="font-size:9px;font-weight:600;color:#555;">/mês</span></span>
+            <span style="font-size:12px;font-weight:900;color:#633806;">${super_}<span style="font-size:9px;font-weight:800;color:#854F0B;">/mês</span></span>
             <span style="font-size:10px;color:#854F0B;font-weight:700;">${superDay}/dia</span>
           </div>` : ''}
         </div>` : ''}
@@ -2031,9 +2030,9 @@ function renderOperatorRankingsFromSheet() {
 
   const catInfo = [
     ['shake', '🥤', 'Shake Mix', 'cat-shake'],
-    ['chantilly', '🍰', 'Chantilly', 'cat-chant'],
+    ['chantilly', '🍦', 'Chantilly', 'cat-chant'],
     ['agua', '💧', 'Água', 'cat-agua'],
-    ['milk', '🧋', 'Milk Shake 500', 'cat-milk']
+    ['milk', '🥛', 'Milk Shake 500', 'cat-milk']
   ];
 
   catInfo.forEach(([key, emoji, label, cls]) => {
@@ -2174,9 +2173,9 @@ function renderOperatorRankingsFromSheet() {
 
   const catInfo = [
     ['shake', '🥤', 'Shake Mix', 'cat-shake'],
-    ['chantilly', '🍰', 'Chantilly', 'cat-chant'],
+    ['chantilly', '🍦', 'Chantilly', 'cat-chant'],
     ['agua', '💧', 'Água', 'cat-agua'],
-    ['milk', '🧋', 'Milk Shake 500', 'cat-milk']
+    ['milk', '🥛', 'Milk Shake 500', 'cat-milk']
   ];
 
   catInfo.forEach(([key, emoji, label, cls]) => {
@@ -2654,7 +2653,7 @@ async function fetchHistoricoVendas() {
 
     const cats = [
       ['shake', '🥤', 'Shake Mix', 'cat-shake'],
-      ['chantilly', '🍰', 'Chantilly', 'cat-chant'],
+      ['chantilly', '🍦', 'Chantilly', 'cat-chant'],
       ['agua', '💧', 'Água', 'cat-agua'],
       ['milk', '🥛', 'Milk Shake 500', 'cat-milk']
     ];
