@@ -2036,9 +2036,9 @@ function renderOperatorRankingsFromSheet() {
           return 0;
         }).filter(v => v > 0);
         if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
+        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
       })()}</td>
-    \`;
+    `;
     rankingBody.appendChild(tr);
   });
 
@@ -2190,9 +2190,9 @@ function renderOperatorRankingsFromSheet() {
           return 0;
         }).filter(v => v > 0);
         if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
+        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
       })()}</td>
-    \`;
+    `;
     rankingBody.appendChild(tr);
   });
 
