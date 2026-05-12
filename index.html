@@ -1668,7 +1668,10 @@ function renderDashboard() {
         <span style="font-size:12px;font-weight:700;color:#A32D2D;">Faltam ${faltamMes.toLocaleString('pt-BR')} un./mês</span>
         ${faltamDia > 0 ? `<span style="font-size:11px;color:#791F1F;">${faltamDia} un./dia nos próx. ${daysLeft} dias</span>` : ''}
       </div>` : `
-      ${real >= meta && meta > 0 ? `<div class="tc-status status-meta">✓ Meta atingida!</div>` : ''}
+      ${real > 0 && meta > 0 && real >= meta ? `
+        <div class="tc-status ${super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
+          ${super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
+        </div>` : ''}
       `}
       ${histHTML}
       `}
@@ -2023,8 +2026,19 @@ function renderOperatorRankingsFromSheet() {
       <td><span class="qty-pill ${winners.shake === op.name ? 'qty-winner' : 'qty-normal'}">${op.shake}${winners.shake === op.name ? ' ★' : ''}</span></td>
       <td><span class="qty-pill ${winners.milk === op.name ? 'qty-winner' : 'qty-normal'}">${op.milk}${winners.milk === op.name ? ' ★' : ''}</span></td>
       <td><strong>${op.total}</strong></td>
-      <td>—</td>
-    `;
+      <td>${(() => {
+        if (!storeMetas) return '<span style="color:#aaa;">—</span>';
+        const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
+          const m = storeMetas[k];
+          if (!m || !m.meta || m.meta <= 0) return 0;
+          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          if (m.real >= m.meta) return CATS[k].premio * 2;
+          return 0;
+        }).filter(v => v > 0);
+        if (!prizes.length) return '<span style="color:#aaa;">—</span>';
+        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
+      })()}</td>
+    \`;
     rankingBody.appendChild(tr);
   });
 
@@ -2166,8 +2180,19 @@ function renderOperatorRankingsFromSheet() {
       <td><span class="qty-pill ${winners.shake === op.name ? 'qty-winner' : 'qty-normal'}">${op.shake}${winners.shake === op.name ? ' ★' : ''}</span></td>
       <td><span class="qty-pill ${winners.milk === op.name ? 'qty-winner' : 'qty-normal'}">${op.milk}${winners.milk === op.name ? ' ★' : ''}</span></td>
       <td><strong>${op.total}</strong></td>
-      <td>—</td>
-    `;
+      <td>${(() => {
+        if (!storeMetas) return '<span style="color:#aaa;">—</span>';
+        const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
+          const m = storeMetas[k];
+          if (!m || !m.meta || m.meta <= 0) return 0;
+          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          if (m.real >= m.meta) return CATS[k].premio * 2;
+          return 0;
+        }).filter(v => v > 0);
+        if (!prizes.length) return '<span style="color:#aaa;">—</span>';
+        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
+      })()}</td>
+    \`;
     rankingBody.appendChild(tr);
   });
 
@@ -2639,6 +2664,25 @@ async function fetchHistoricoVendas() {
       winners[k] = ranked.length ? ranked[0].name : null;
     });
 
+    // ── Prêmios: busca metas da loja para calcular ──────────────────────
+    const PREMIO_BASE  = { agua: 30, chantilly: 30, shake: 50, milk: 50 };
+    const PREMIO_SUPER = { agua: 40, chantilly: 40, shake: 75, milk: 75 };
+    const catMetas = (typeof window.extractStoreMetas === 'function' && storeKey)
+      ? window.extractStoreMetas(storeKey) : null;
+    const catPrize = {};
+    ['agua', 'chantilly', 'shake', 'milk'].forEach(k => {
+      if (!catMetas || !catMetas[k]) { catPrize[k] = null; return; }
+      const { meta, real, super: sup } = catMetas[k];
+      if (!meta || meta <= 0) { catPrize[k] = null; return; }
+      if (real >= (sup || Infinity)) {
+        catPrize[k] = PREMIO_SUPER[k] * 2;  // SuperMeta atingida
+      } else if (real >= meta) {
+        catPrize[k] = PREMIO_BASE[k] * 2;   // Meta atingida
+      } else {
+        catPrize[k] = null;  // Meta não atingida — sem prêmio
+      }
+    });
+
     tbody.innerHTML = list.map((op, i) => {
       const initials = op.name.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase();
       const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : 'rank-n';
@@ -2658,7 +2702,14 @@ async function fetchHistoricoVendas() {
           <td>${pill('shake', op.shake)}</td>
           <td>${pill('milk', op.milk)}</td>
           <td><strong>${Math.round(op.total || 0)}</strong></td>
-          <td>—</td>
+          <td>${(() => {
+            const prizes = ['agua','chantilly','shake','milk']
+              .filter(k => winners[k] === op.name && catPrize[k] !== null)
+              .map(k => catPrize[k]);
+            if (!prizes.length) return '<span style="color:#aaa;">—</span>';
+            const total = prizes.reduce((a,b) => a+b, 0);
+            return `<span style="font-weight:900;color:#2d7d32;">R$ ${total}</span>`;
+          })()}</td>
         </tr>
       `;
     }).join('');
