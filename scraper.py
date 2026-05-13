@@ -669,6 +669,28 @@ def add_hist_row(data_rows: list, existing_dates: set,
 
 def update_realizado(ws_gsheet, store_key: str, totals: dict):
     report_month, report_year = get_report_month_info()
+
+    # Proteção: só sobrescreve o mês corrente (nunca meses fechados).
+    # Se end_dt.month != now_br.month, significa que o período de referência
+    # pertence ao mês anterior (ex: rodou no dia 01 e D-1 = último dia do mês passado).
+    # Nesse caso permitimos — é o fechamento normal do mês anterior.
+    # Mas NUNCA escrevemos em meses mais antigos que o mês anterior.
+    from datetime import date
+    now_br = br_now()
+    current_month = now_br.month
+    current_year  = now_br.year
+    # Permitido: mês atual OU mês anterior (virada de mês no dia 1)
+    prev_month = (current_month - 2) % 12 + 1
+    prev_year  = current_year if current_month > 1 else current_year - 1
+    is_allowed = (
+        (report_month == current_month and report_year == current_year) or
+        (report_month == prev_month     and report_year == prev_year and now_br.day == 1)
+    )
+    if not is_allowed:
+        print(f"  ⚠️ BLOQUEADO: tentativa de escrever em {report_month}/{report_year} "
+              f"(mês fechado). Hoje={current_month}/{current_year}. Pulando.")
+        return
+
     month_col = get_month_start_col(report_month)
     store_row = STORE_SHEET_ROW[store_key]
     real_row = store_row + 2
