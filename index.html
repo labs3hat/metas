@@ -1548,6 +1548,17 @@ function renderDashboard() {
   const container = document.getElementById('team-cats');
   container.innerHTML = '';
 
+  // SuperMeta só vale se TODAS as 4 metas operacionais foram atingidas
+  const allMetaHit = storeMetas
+    ? ['shake','chantilly','agua','milk'].every(c => {
+        const m = storeMetas[c]?.meta || 0;
+        const r = isMonthClosed()
+          ? (storeMetas[c]?.real || 0)
+          : (parsedOps ? Object.values(parsedOps).reduce((s,o)=>s+(o[c]||0),0) : 0);
+        return m > 0 && r >= m;
+      })
+    : false;
+
   CAT_KEYS.forEach(cat => {
     const info  = CATS[cat];
     const meta  = storeMetas ? (storeMetas[cat]?.meta  || 0) : 0;
@@ -1564,7 +1575,7 @@ function renderDashboard() {
     let statusCls, statusLabel;
     if (!hasMeta) {
       statusCls = 'status-nodata'; statusLabel = 'Meta não definida';
-    } else if (super_ > 0 && real >= super_) {
+    } else if (allMetaHit && super_ > 0 && real >= super_) {
       statusCls = 'status-supermeta'; statusLabel = '⭐ SuperMeta atingida!';
     } else if (real >= meta) {
       statusCls = 'status-meta'; statusLabel = '✓ Meta atingida!';
@@ -1669,8 +1680,8 @@ function renderDashboard() {
         ${faltamDia > 0 ? `<span style="font-size:11px;color:#791F1F;">${faltamDia} un./dia nos próx. ${daysLeft} dias</span>` : ''}
       </div>` : `
       ${real > 0 && meta > 0 && real >= meta ? `
-        <div class="tc-status ${super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
-          ${super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
+        <div class="tc-status ${allMetaHit && super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
+          ${allMetaHit && super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
         </div>` : ''}
       `}
       ${histHTML}
@@ -2031,14 +2042,18 @@ function renderOperatorRankingsFromSheet() {
         const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
           const m = storeMetas[k];
           if (!m || !m.meta || m.meta <= 0) return 0;
-          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          // SuperMeta só vale se a loja bateu TODAS as 4 metas
+          const allHit = ['shake','chantilly','agua','milk'].every(ck => {
+            const sm = storeMetas[ck]; return sm && sm.meta > 0 && sm.real >= sm.meta;
+          });
+          if (allHit && m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
           if (m.real >= m.meta) return CATS[k].premio * 2;
           return 0;
         }).filter(v => v > 0);
         if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
+        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
       })()}</td>
-    `;
+    \`;
     rankingBody.appendChild(tr);
   });
 
@@ -2185,14 +2200,18 @@ function renderOperatorRankingsFromSheet() {
         const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
           const m = storeMetas[k];
           if (!m || !m.meta || m.meta <= 0) return 0;
-          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          // SuperMeta só vale se a loja bateu TODAS as 4 metas
+          const allHit = ['shake','chantilly','agua','milk'].every(ck => {
+            const sm = storeMetas[ck]; return sm && sm.meta > 0 && sm.real >= sm.meta;
+          });
+          if (allHit && m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
           if (m.real >= m.meta) return CATS[k].premio * 2;
           return 0;
         }).filter(v => v > 0);
         if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
+        return \`<span style="font-weight:900;color:#2d7d32;">R$ \${prizes.reduce((a,b)=>a+b,0)}</span>\`;
       })()}</td>
-    `;
+    \`;
     rankingBody.appendChild(tr);
   });
 
@@ -2674,7 +2693,11 @@ async function fetchHistoricoVendas() {
       if (!catMetas || !catMetas[k]) { catPrize[k] = null; return; }
       const { meta, real, super: sup } = catMetas[k];
       if (!meta || meta <= 0) { catPrize[k] = null; return; }
-      if (real >= (sup || Infinity)) {
+      // SuperMeta só vale se a loja bateu TODAS as 4 metas operacionais
+      const allHitFinal = catMetas && ['agua','chantilly','shake','milk'].every(ck => {
+        const cm = catMetas[ck]; return cm && cm.meta > 0 && cm.real >= cm.meta;
+      });
+      if (allHitFinal && real >= (sup || Infinity)) {
         catPrize[k] = PREMIO_SUPER[k] * 2;  // SuperMeta atingida
       } else if (real >= meta) {
         catPrize[k] = PREMIO_BASE[k] * 2;   // Meta atingida
