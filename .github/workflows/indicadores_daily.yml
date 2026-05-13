@@ -1,0 +1,50 @@
+name: BIP360 Indicadores Diários
+
+on:
+  schedule:
+    # 05:00 BRT = 08:00 UTC (horário de verão: 04:00 BRT = 07:00 UTC)
+    # Usar 08:00 UTC cobre ambos os cenários com margem.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Rodar scraper de indicadores
+        env:
+          BIP_USER: ${{ secrets.BIP_USER }}
+          BIP_PASS: ${{ secrets.BIP_PASS }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          DEBUG_DIR: debug
+        run: python indicadores_scraper.py
+
+      - name: Salvar prints de diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indicadores-debug-${{ github.run_id }}
+          path: debug/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Notificar em caso de falha
+        if: failure()
+        run: |
+          echo "::error::O scraper de indicadores falhou. Baixe o artifact 'indicadores-debug-${{ github.run_id }}' para diagnóstico."
