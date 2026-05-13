@@ -1586,6 +1586,12 @@ function renderDashboard() {
   const container = document.getElementById('team-cats');
   container.innerHTML = '';
 
+  // SuperMeta só é válida quando TODAS as 4 metas operacionais foram atingidas
+  const superUnlocked = CAT_KEYS.every(c => {
+    const m = storeMetas ? (storeMetas[c]?.meta || 0) : 0;
+    return m > 0 && totals[c] >= m;
+  });
+
   CAT_KEYS.forEach(cat => {
     const info  = CATS[cat];
     const meta  = storeMetas ? (storeMetas[cat]?.meta  || 0) : 0;
@@ -1602,7 +1608,7 @@ function renderDashboard() {
     let statusCls, statusLabel;
     if (!hasMeta) {
       statusCls = 'status-nodata'; statusLabel = 'Meta não definida';
-    } else if (super_ > 0 && real >= super_) {
+    } else if (superUnlocked && super_ > 0 && real >= super_) {
       statusCls = 'status-supermeta'; statusLabel = '⭐ SuperMeta atingida!';
     } else if (real >= meta) {
       statusCls = 'status-meta'; statusLabel = '✓ Meta atingida!';
@@ -1707,8 +1713,8 @@ function renderDashboard() {
         ${faltamDia > 0 ? `<span style="font-size:11px;color:#791F1F;">${faltamDia} un./dia nos próx. ${daysLeft} dias</span>` : ''}
       </div>` : `
       ${real > 0 && meta > 0 && real >= meta ? `
-        <div class="tc-status ${super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
-          ${super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
+        <div class="tc-status ${superUnlocked && super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
+          ${superUnlocked && super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
         </div>` : ''}
       `}
       ${histHTML}
