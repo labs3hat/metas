@@ -758,7 +758,7 @@
         <option value="ctba3">CTBA 3 — Loja Shopping Estação</option>
         <option value="ctba5">CTBA 5 — Loja Shopping Jockey</option>
         <option value="ctba7q">CTBA 7 — Quiosque Shopping Palladium</option>
-        <option value="ctba10">CTBA 10 — Loja Shopping Palladium</option>
+        <option value="ctba11">CTBA 11 — Loja Shopping Palladium</option>
         <option value="cl2">CL 2 — City Center Outlet Campo Largo</option>
       </optgroup>
     </select>
@@ -934,7 +934,7 @@ const GID_OPERADOR = '786119570'; // Metas Operador suporte
 // Metas TM suporte structure:
 // Row 1: month labels (jan-26, fev-26...) — merged across 2 cols each
 // Row 2: "Meta TM" / "Realizado TM" repeating
-// Rows 3-12: stores (SJP1, CTBA3, CTBA5, CL2, CTBA7q, CTBA10, MGA3, MGA5, MGA7, MGA8)
+// Rows 3-12: stores (SJP1, CTBA3, CTBA5, CL2, CTBA7q, CTBA11, MGA3, MGA5, MGA7, MGA8)
 // Each month block = 2 CSV cols: MetaTM=+0, RealTM=+1
 // Month start cols (CSV 0-indexed): Jan=1, Fev=3, Mar=5, Abr=7, Mai=9...
 const TMS_MONTH_MAP = {
@@ -946,7 +946,7 @@ const TMS_MONTH_MAP = {
 const TMS_STORE_ROW = {
   // gviz uses row 1 (month labels) as header → CSV[0]=row1, CSV[1]=row2(headers), CSV[2]=row3(SJP)
   sjp1:2, ctba3:3, ctba5:4, cl2:5, ctba7q:6,
-  ctba10:7, mga3:8, mga5:9, mga7:10, mga8:11,
+  ctba11:7, mga3:8, mga5:9, mga7:10, mga8:11,
 };
 
 // New sheet structure (Metas Operacionais):
@@ -1010,7 +1010,7 @@ const STORE_MAP = {
   ctba5:  { label:'CTBA 5 — Loja Shopping Jockey',         csvRow:10 },
   cl2:    { label:'CL 2 — City Center Outlet Campo Largo', csvRow:14 },
   ctba7q: { label:'CTBA 7 — Quiosque Shopping Palladium',  csvRow:18 },
-  ctba10: { label:'CTBA 10 — Loja Shopping Palladium',     csvRow:22 },
+  ctba11: { label:'CTBA 11 — Loja Shopping Palladium',     csvRow:22 },
   mga3:   { label:'MGA 3 — Loja Avenida Center',           csvRow:26 },
   mga5:   { label:'MGA 5 — Loja Shopping Cidade',          csvRow:30 },
   mga7:   { label:'MGA 7 — Quiosque Avenida Center',       csvRow:34 },
@@ -2293,7 +2293,7 @@ async function fetchHistoricoVendas() {
     // Col: A=Loja, B=Data, C=Shake, D=Chantilly, E=Água, F=MS500, G=Canecake
     const STORE_KEYS_HIST = {
       'sjp1':'sjp1','ctba3':'ctba3','ctba5':'ctba5','cl2':'cl2','ctba7q':'ctba7q',
-      'ctba10':'ctba10','mga3':'mga3','mga5':'mga5','mga7':'mga7','mga8':'mga8'
+      'ctba11':'ctba11','mga3':'mga3','mga5':'mga5','mga7':'mga7','mga8':'mga8'
     };
     const CAT_COLS_HIST = { shake:2, chantilly:3, agua:4, milk:5, canecake:6 };
 
@@ -2517,19 +2517,6 @@ function renderPaymentSummary() {
       ${b3rows}
     </div>
 
-    <div class="ps-grand">
-      <div>
-        <div class="ps-grand-label">Total fixo a pagar</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:3px;">
-          Bloco 2 + Liderança: R$ ${block2Total + lidParte1 + lidParte2} &nbsp;·&nbsp;
-          Bloco 1: R$ ${block1Total} × nº de operadores ativos
-        </div>
-      </div>
-      <div style="text-align:right;">
-        <div class="ps-grand-value">R$ ${block2Total + lidParte1 + lidParte2}</div>
-        <div style="font-size:11px;color:var(--muted);">+ R$${block1Total} × N operadores</div>
-      </div>
-    </div>
   `;
 
   el.style.display = 'block';
@@ -2553,7 +2540,7 @@ function renderPaymentSummary() {
     ctba3: 'CTBA 3 — Loja Shopping Estação',
     ctba5: 'CTBA 5 — Loja Shopping Jockey',
     ctba7q: 'CTBA 7 — Quiosque Shopping Palladium',
-    ctba10: 'CTBA 10 — Loja Shopping Palladium',
+    ctba11: 'CTBA 11 — Loja Shopping Palladium',
     mga3: 'MGA 3 — Loja Avenida Center',
     mga5: 'MGA 5 — Loja Shopping Cidade',
     mga7: 'MGA 7 — Quiosque Avenida Center',
@@ -2566,7 +2553,7 @@ function renderPaymentSummary() {
     ctba3: ['ctba 3', 'estacao', 'estação'],
     ctba5: ['ctba 5', 'jockey'],
     ctba7q: ['ctba 7', 'quiosque shopping palladium'],
-    ctba10: ['ctba 10', 'loja shopping palladium'],
+    ctba11: ['ctba 11', 'loja shopping palladium'],
     mga3: ['mga 3', 'avenida center'],
     mga5: ['mga 5', 'shopping cidade'],
     mga7: ['mga 7', 'quiosque avenida'],
@@ -3190,7 +3177,7 @@ document.addEventListener("DOMContentLoaded", function () {
     {key:'ctba3', code:'CTBA3', name:'Shopping Estação'},
     {key:'ctba5', code:'CTBA5', name:'Shopping Jockey'},
     {key:'ctba7q', code:'CTBA7', name:'Quiosque Palladium'},
-    {key:'ctba10', code:'CTBA10', name:'Loja Palladium'},
+    {key:'ctba11', code:'CTBA11', name:'Loja Palladium'},
     {key:'cl2', code:'CL2', name:'City Center Outlet'},
     {key:'mga3', code:'MGA3', name:'Avenida Center'},
     {key:'mga5', code:'MGA5', name:'Shopping Cidade'},
