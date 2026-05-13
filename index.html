@@ -650,6 +650,36 @@
   .ranking-table td:nth-child(6)::before { content: "Total"; font-weight: bold; }
   .ranking-table td:nth-child(7)::before { content: "Prêmio"; font-weight: bold; }
 }
+
+  /* ── RESUMO DE PAGAMENTO ── */
+  #payment-summary { font-size:14px; }
+  .ps-header { background:var(--bg); border:1.5px solid var(--border); border-radius:var(--radius); padding:12px 16px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; }
+  .ps-title { font-size:15px; font-weight:900; color:var(--text); }
+  .ps-subtitle { font-size:12px; color:var(--muted); }
+  .ps-sec { border:1.5px solid var(--border); border-radius:var(--radius); margin-bottom:12px; overflow:hidden; }
+  .ps-sec-head { padding:9px 14px; font-size:13px; font-weight:800; border-bottom:1.5px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  .ps-sec-head.op  { background:#E6F1FB; color:#0C447C; }
+  .ps-sec-head.dob { background:#FAEEDA; color:#633806; }
+  .ps-sec-head.lid { background:#EAF3DE; color:#27500A; }
+  .ps-row { display:flex; justify-content:space-between; align-items:center; padding:9px 14px; border-bottom:1.5px solid var(--border); }
+  .ps-row:last-child { border-bottom:none; }
+  .ps-row-name { font-weight:800; color:var(--text); font-size:13px; }
+  .ps-row-det  { font-size:11px; color:var(--muted); margin-top:2px; }
+  .ps-row-val  { font-size:14px; font-weight:900; text-align:right; }
+  .ps-row-val.blue  { color:#0C447C; }
+  .ps-row-val.amber { color:#633806; }
+  .ps-row-val.green { color:#27500A; }
+  .ps-row-val.muted { color:var(--muted); }
+  .ps-sub { display:flex; justify-content:space-between; padding:9px 14px; font-weight:800; font-size:13px; background:var(--bg); }
+  .ps-obs { font-size:11px; color:var(--muted); padding:7px 14px; border-top:1.5px solid var(--border); }
+  .ps-grand { border:1.5px solid var(--border); border-radius:var(--radius); padding:14px 16px; display:flex; justify-content:space-between; align-items:center; background:var(--card); }
+  .ps-grand-label { font-size:15px; font-weight:900; color:var(--text); }
+  .ps-grand-value { font-size:22px; font-weight:900; color:#27500A; }
+  .ps-badge { font-size:10px; padding:1px 6px; border-radius:50px; margin-left:4px; font-weight:700; }
+  .ps-badge.ok  { background:#EAF3DE; color:#3B6D11; }
+  .ps-badge.no  { background:var(--bg); color:var(--muted); }
+  .ps-badge.sup { background:#FAEEDA; color:#633806; }
+
 </style>
 </head>
 <body>
@@ -866,6 +896,11 @@
       <div id="tm-store-pill" style="margin-left:auto;background:var(--pink);color:white;font-size:12px;font-weight:800;padding:5px 14px;border-radius:50px;">—</div>
     </div>
     <div id="tm-body" style="padding:20px 22px;"></div>
+  </div>
+
+
+  <!-- RESUMO DE PAGAMENTO -->
+  <div id="payment-summary" style="display:none; margin-top:18px;">
   </div>
 
 
@@ -1328,6 +1363,7 @@ function onStoreChange() {
     renderDashboard();
     renderTMDashboard();
     document.getElementById('results').style.display = 'none';
+    document.getElementById('payment-summary').style.display = 'none';
     return;
   }
 
@@ -1346,6 +1382,7 @@ function onStoreChange() {
     if (resultsEl) resultsEl.style.display = 'none';
   }
   renderOperatorRankingsFromSheet();
+  renderPaymentSummary();
 }
 
 function onMonthChange() {
@@ -1367,6 +1404,7 @@ function onMonthChange() {
     if (resultsEl) resultsEl.style.display = 'none';
   }
   renderOperatorRankingsFromSheet();
+  renderPaymentSummary();
 }
 
 function updateUploadVisibility() {
@@ -1548,17 +1586,6 @@ function renderDashboard() {
   const container = document.getElementById('team-cats');
   container.innerHTML = '';
 
-  // SuperMeta só vale se TODAS as 4 metas operacionais foram atingidas
-  const allMetaHit = storeMetas
-    ? ['shake','chantilly','agua','milk'].every(c => {
-        const m = storeMetas[c]?.meta || 0;
-        const r = isMonthClosed()
-          ? (storeMetas[c]?.real || 0)
-          : (parsedOps ? Object.values(parsedOps).reduce((s,o)=>s+(o[c]||0),0) : 0);
-        return m > 0 && r >= m;
-      })
-    : false;
-
   CAT_KEYS.forEach(cat => {
     const info  = CATS[cat];
     const meta  = storeMetas ? (storeMetas[cat]?.meta  || 0) : 0;
@@ -1575,7 +1602,7 @@ function renderDashboard() {
     let statusCls, statusLabel;
     if (!hasMeta) {
       statusCls = 'status-nodata'; statusLabel = 'Meta não definida';
-    } else if (allMetaHit && super_ > 0 && real >= super_) {
+    } else if (super_ > 0 && real >= super_) {
       statusCls = 'status-supermeta'; statusLabel = '⭐ SuperMeta atingida!';
     } else if (real >= meta) {
       statusCls = 'status-meta'; statusLabel = '✓ Meta atingida!';
@@ -1680,8 +1707,8 @@ function renderDashboard() {
         ${faltamDia > 0 ? `<span style="font-size:11px;color:#791F1F;">${faltamDia} un./dia nos próx. ${daysLeft} dias</span>` : ''}
       </div>` : `
       ${real > 0 && meta > 0 && real >= meta ? `
-        <div class="tc-status ${allMetaHit && super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
-          ${allMetaHit && super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
+        <div class="tc-status ${super_ > 0 && real >= super_ ? 'status-supermeta' : 'status-meta'}">
+          ${super_ > 0 && real >= super_ ? '⭐ SuperMeta atingida!' : '✓ Meta atingida!'}
         </div>` : ''}
       `}
       ${histHTML}
@@ -2042,11 +2069,7 @@ function renderOperatorRankingsFromSheet() {
         const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
           const m = storeMetas[k];
           if (!m || !m.meta || m.meta <= 0) return 0;
-          // SuperMeta só vale se a loja bateu TODAS as 4 metas
-          const allHit = ['shake','chantilly','agua','milk'].every(ck => {
-            const sm = storeMetas[ck]; return sm && sm.meta > 0 && sm.real >= sm.meta;
-          });
-          if (allHit && m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
           if (m.real >= m.meta) return CATS[k].premio * 2;
           return 0;
         }).filter(v => v > 0);
@@ -2200,11 +2223,7 @@ function renderOperatorRankingsFromSheet() {
         const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
           const m = storeMetas[k];
           if (!m || !m.meta || m.meta <= 0) return 0;
-          // SuperMeta só vale se a loja bateu TODAS as 4 metas
-          const allHit = ['shake','chantilly','agua','milk'].every(ck => {
-            const sm = storeMetas[ck]; return sm && sm.meta > 0 && sm.real >= sm.meta;
-          });
-          if (allHit && m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
+          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
           if (m.real >= m.meta) return CATS[k].premio * 2;
           return 0;
         }).filter(v => v > 0);
@@ -2323,6 +2342,197 @@ async function fetchHistoricoVendas() {
 }
 
 </script>
+
+// ── RESUMO DE PAGAMENTO ────────────────────────────────────────────────────
+function renderPaymentSummary() {
+  const el = document.getElementById('payment-summary');
+  if (!el) return;
+
+  if (!storeMetas || !selectedStore || !selectedMonth) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const tmData   = extractTMMetas(selectedStore);
+  const opsData  = parsedOps || {};
+  const closed   = isMonthClosed();
+
+  // ── Prêmios base e supermeta ──────────────────────────────────────────
+  const PREMIO_BASE  = { shake:50, chantilly:30, agua:30, milk:50 };
+  const PREMIO_SUPER = { shake:75, chantilly:40, agua:40, milk:75 };
+  const CATS_OP      = ['shake','chantilly','agua','milk'];
+
+  // ── Verificar quais metas a loja atingiu ─────────────────────────────
+  const allMetaHit = CATS_OP.every(c => {
+    const m = storeMetas[c]; return m && m.meta > 0 && m.real >= m.meta;
+  });
+
+  const catStatus = {}; // 'super' | 'meta' | 'none'
+  CATS_OP.forEach(c => {
+    const m = storeMetas[c];
+    if (!m || !m.meta) { catStatus[c] = 'none'; return; }
+    if (allMetaHit && m.real >= m.super && m.super > 0) catStatus[c] = 'super';
+    else if (m.real >= m.meta) catStatus[c] = 'meta';
+    else catStatus[c] = 'none';
+  });
+
+  // ── Bloco 1: valor por operador ───────────────────────────────────────
+  const block1Total = CATS_OP.reduce((s, c) => {
+    if (catStatus[c] === 'super') return s + PREMIO_SUPER[c];
+    if (catStatus[c] === 'meta')  return s + PREMIO_BASE[c];
+    return s;
+  }, 0);
+
+  // ── Bloco 2: meta em dobro — vencedor por categoria ──────────────────
+  const leaderSet = new Set(
+    Array.from(document.querySelectorAll('.leadership-badge, .lider-badge'))
+      .map(el => el.closest('tr')?.dataset?.name).filter(Boolean)
+  );
+
+  const ops = {};
+  Object.entries(opsData).forEach(([name, data]) => {
+    if (!leaderSet.has(name)) ops[name] = data;
+  });
+
+  const block2 = []; // [{name, cat, label, extra}]
+  CATS_OP.forEach(c => {
+    if (catStatus[c] === 'none') return;
+    const base = catStatus[c] === 'super' ? PREMIO_SUPER[c] : PREMIO_BASE[c];
+    const winner = Object.entries(ops).sort((a,b) => (b[1][c]||0)-(a[1][c]||0))[0];
+    if (!winner || !winner[1][c]) return;
+    block2.push({
+      name:  winner[0],
+      cat:   CATS[c].label,
+      qty:   winner[1][c],
+      extra: base, // additional (same as base — total = base×2, extra = base)
+      status: catStatus[c]
+    });
+  });
+
+  // ── Bloco 3: liderança ────────────────────────────────────────────────
+  const bateuTM = tmData && tmData.metaTM > 0 && tmData.realTM >= tmData.metaTM;
+  let lidParte1 = 0, lidParte2 = 0;
+  if (bateuTM) {
+    lidParte1 = block1Total; // mesmas metas op. atingidas
+    const bonusTM = Math.max(150, lidParte1 * 2);
+    lidParte2 = bonusTM;
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────
+  const storeLabel = document.getElementById('store-select')?.selectedOptions[0]?.text || selectedStore;
+  const monthLabel = selectedMonth;
+
+  const catLabel = c => ({ shake:'Shake Mix', chantilly:'Chantilly', agua:'Água', milk:'Milk Shake' }[c] || c);
+  const catBadge = s => s === 'super'
+    ? '<span class="ps-badge sup">supermeta</span>'
+    : s === 'meta' ? '<span class="ps-badge ok">meta</span>'
+    : '<span class="ps-badge no">não atingida</span>';
+
+  // Block 1 rows
+  const b1rows = CATS_OP.map(c => {
+    const val = catStatus[c] === 'super' ? PREMIO_SUPER[c] : catStatus[c] === 'meta' ? PREMIO_BASE[c] : 0;
+    return `<div class="ps-row" style="${catStatus[c]==='none'?'opacity:0.5':''}">
+      <div>
+        <div class="ps-row-name">${catLabel(c)} ${catBadge(catStatus[c])}</div>
+      </div>
+      <div>
+        <div class="ps-row-val ${catStatus[c]==='none'?'muted':'blue'}">
+          ${catStatus[c]==='none' ? '—' : 'R$ '+val}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Block 2 rows
+  const b2rows = block2.length > 0
+    ? block2.map(b => `<div class="ps-row">
+        <div>
+          <div class="ps-row-name">${b.name}</div>
+          <div class="ps-row-det">${b.cat} — 1º lugar (${b.qty} un.) ${catBadge(b.status)} → R$${b.extra} adicional</div>
+        </div>
+        <div>
+          <div class="ps-row-val amber">R$ ${b.extra}</div>
+          <div style="font-size:10px;color:var(--muted);text-align:right;">adicional</div>
+        </div>
+      </div>`).join('')
+    : `<div class="ps-obs">Sem meta em dobro — nenhuma categoria atingida</div>`;
+
+  // Block 3 rows
+  const b3rows = bateuTM ? `
+    <div class="ps-row">
+      <div>
+        <div class="ps-row-name">Liderança</div>
+        <div class="ps-row-det">Parte 1 — metas operacionais atingidas</div>
+      </div>
+      <div class="ps-row-val green">R$ ${lidParte1}</div>
+    </div>
+    <div class="ps-row">
+      <div>
+        <div class="ps-row-name">Liderança</div>
+        <div class="ps-row-det">Parte 2 — bônus TM: max(R$150, R$${lidParte1}×2=R$${lidParte1*2}) = R$${lidParte2}</div>
+      </div>
+      <div class="ps-row-val green">R$ ${lidParte2}</div>
+    </div>
+    <div class="ps-sub">
+      <span>Subtotal liderança</span>
+      <span style="color:#27500A;">R$ ${lidParte1 + lidParte2}</span>
+    </div>`
+    : `<div class="ps-obs">Sem bônus — TM não atingido (Real: R$${tmData?.realTM?.toFixed(2)||'—'} / Meta: R$${tmData?.metaTM?.toFixed(2)||'—'})</div>`;
+
+  const block2Total = block2.reduce((s,b) => s+b.extra, 0);
+  const grandTotal  = `R$ ${block1Total} × N operadores + R$ ${block2Total + lidParte1 + lidParte2}`;
+
+  el.innerHTML = `
+    <div class="ps-header">
+      <div class="ps-title">Resumo de pagamento — bonificações</div>
+      <div class="ps-subtitle">${storeLabel} &nbsp;·&nbsp; ${monthLabel}</div>
+    </div>
+
+    <div class="ps-sec">
+      <div class="ps-sec-head op">
+        <span>1. Operação — todos os operadores</span>
+        <span>valor por operador: R$ ${block1Total}</span>
+      </div>
+      ${b1rows}
+      <div class="ps-sub">
+        <span>Subtotal por operador</span>
+        <span style="color:#0C447C;">R$ ${block1Total}</span>
+      </div>
+    </div>
+
+    <div class="ps-sec">
+      <div class="ps-sec-head dob">
+        <span>2. Meta em dobro — melhor operador por categoria</span>
+        <span>adicional ao bloco 1</span>
+      </div>
+      ${b2rows}
+    </div>
+
+    <div class="ps-sec">
+      <div class="ps-sec-head lid">
+        <span>3. Liderança — bônus ticket médio</span>
+        <span>${bateuTM ? `TM R$${tmData.realTM.toFixed(2)} / meta R$${tmData.metaTM.toFixed(2)} ✓` : 'TM não atingido'}</span>
+      </div>
+      ${b3rows}
+    </div>
+
+    <div class="ps-grand">
+      <div>
+        <div class="ps-grand-label">Total fixo a pagar</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px;">
+          Bloco 2 + Liderança: R$ ${block2Total + lidParte1 + lidParte2} &nbsp;·&nbsp;
+          Bloco 1: R$ ${block1Total} × nº de operadores ativos
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div class="ps-grand-value">R$ ${block2Total + lidParte1 + lidParte2}</div>
+        <div style="font-size:11px;color:var(--muted);">+ R$${block1Total} × N operadores</div>
+      </div>
+    </div>
+  `;
+
+  el.style.display = 'block';
+}
 
 <script id="tm-operadores-final-isolado">
 /*
@@ -2693,11 +2903,7 @@ async function fetchHistoricoVendas() {
       if (!catMetas || !catMetas[k]) { catPrize[k] = null; return; }
       const { meta, real, super: sup } = catMetas[k];
       if (!meta || meta <= 0) { catPrize[k] = null; return; }
-      // SuperMeta só vale se a loja bateu TODAS as 4 metas operacionais
-      const allHitFinal = catMetas && ['agua','chantilly','shake','milk'].every(ck => {
-        const cm = catMetas[ck]; return cm && cm.meta > 0 && cm.real >= cm.meta;
-      });
-      if (allHitFinal && real >= (sup || Infinity)) {
+      if (real >= (sup || Infinity)) {
         catPrize[k] = PREMIO_SUPER[k] * 2;  // SuperMeta atingida
       } else if (real >= meta) {
         catPrize[k] = PREMIO_BASE[k] * 2;   // Meta atingida
