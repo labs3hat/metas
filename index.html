@@ -648,7 +648,6 @@
   .ranking-table td:nth-child(4)::before { content: "🥤 Shake"; font-weight: bold; }
   .ranking-table td:nth-child(5)::before { content: "🥛 Milk"; font-weight: bold; }
   .ranking-table td:nth-child(6)::before { content: "Total"; font-weight: bold; }
-  .ranking-table td:nth-child(7)::before { content: "Prêmio"; font-weight: bold; }
 }
 
   /* ── RESUMO DE PAGAMENTO ── */
@@ -869,7 +868,6 @@
             <th>🥤 Shake Mix</th>
             <th>🥛 Milk Shake 500</th>
             <th>Total</th>
-            <th>Prêmio est.</th>
           </tr>
         </thead>
         <tbody id="ranking-body"></tbody>
@@ -1860,15 +1858,11 @@ function renderResults() {
     const isLeader = leadershipSet.has(name);
     const initials = name.split(' ').slice(0,2).map(w => w[0]||'').join('').toUpperCase();
 
-    let premio = 0;
-    const premioItems = [];
-
     let rowCells = '';
     CAT_KEYS.forEach(cat => {
       const qty = o[cat];
       const isWinner = winners[cat] === name && !isLeader && lojaReached[cat];
       const indMeta  = metas[cat] > 0 && qty >= metas[cat];
-      if (isWinner) { premio += CATS[cat].premio * 2; premioItems.push(`${CATS[cat].emoji}×2`); }
       let pillCls = 'qty-normal';
       if (isWinner) pillCls = 'qty-winner';
       else if (indMeta) pillCls = 'qty-meta';
@@ -1894,16 +1888,6 @@ function renderResults() {
       </td>
       ${rowCells}
       <td style="font-weight:900;font-size:14px;">${total}</td>
-      <td>${isLeader
-  ? (tmData && tmData.tmKnown && isMonthClosed()
-      ? (() => { const lp = calcLeadershipPrize(storeMetas, tmData); return lp.bateuTM
-          ? `<span style="font-size:13px;font-weight:800;color:#2E7D32;">R$ ${lp.total}</span><br><span style="font-size:10px;color:var(--muted);">liderança · TM ✓</span>`
-          : `<span style="font-size:11px;color:var(--muted);">TM não atingido</span>`; })()
-      : '<span style="font-size:10px;color:var(--muted);">ver painel</span>')
-  : (premio > 0
-      ? `<span style="font-size:13px;font-weight:800;color:var(--teal);">+ R$ ${premio}</span><br><span style="font-size:10px;color:var(--muted);">${premioItems.join(' ')}</span>`
-      : '<span style="font-size:11px;color:var(--muted);">—</span>')
-}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -2036,7 +2020,7 @@ function renderOperatorRankingsFromSheet() {
   if (!list.length) {
     rankingBody.innerHTML = `
       <tr>
-        <td colspan="7" style="text-align:center;color:var(--muted);padding:18px;">
+        <td colspan="6" style="text-align:center;color:var(--muted);padding:18px;">
           Nenhum operador encontrado para esta loja/mês.
         </td>
       </tr>`;
@@ -2070,18 +2054,6 @@ function renderOperatorRankingsFromSheet() {
       <td><span class="qty-pill ${winners.shake === op.name ? 'qty-winner' : 'qty-normal'}">${op.shake}${winners.shake === op.name ? ' ★' : ''}</span></td>
       <td><span class="qty-pill ${winners.milk === op.name ? 'qty-winner' : 'qty-normal'}">${op.milk}${winners.milk === op.name ? ' ★' : ''}</span></td>
       <td><strong>${op.total}</strong></td>
-      <td>${(() => {
-        if (!storeMetas) return '<span style="color:#aaa;">—</span>';
-        const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
-          const m = storeMetas[k];
-          if (!m || !m.meta || m.meta <= 0) return 0;
-          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
-          if (m.real >= m.meta) return CATS[k].premio * 2;
-          return 0;
-        }).filter(v => v > 0);
-        if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
-      })()}</td>
     `;
     rankingBody.appendChild(tr);
   });
@@ -2190,7 +2162,7 @@ function renderOperatorRankingsFromSheet() {
   if (!list.length) {
     rankingBody.innerHTML = `
       <tr>
-        <td colspan="7" style="text-align:center;color:var(--muted);padding:18px;">
+        <td colspan="6" style="text-align:center;color:var(--muted);padding:18px;">
           Nenhum operador encontrado para esta loja/mês.
         </td>
       </tr>`;
@@ -2224,18 +2196,6 @@ function renderOperatorRankingsFromSheet() {
       <td><span class="qty-pill ${winners.shake === op.name ? 'qty-winner' : 'qty-normal'}">${op.shake}${winners.shake === op.name ? ' ★' : ''}</span></td>
       <td><span class="qty-pill ${winners.milk === op.name ? 'qty-winner' : 'qty-normal'}">${op.milk}${winners.milk === op.name ? ' ★' : ''}</span></td>
       <td><strong>${op.total}</strong></td>
-      <td>${(() => {
-        if (!storeMetas) return '<span style="color:#aaa;">—</span>';
-        const prizes = CAT_KEYS.filter(k => k !== 'canecake' && winners[k] === op.name).map(k => {
-          const m = storeMetas[k];
-          if (!m || !m.meta || m.meta <= 0) return 0;
-          if (m.real >= (m.super || Infinity) && m.super > 0) return CATS[k].premio * 1.5;
-          if (m.real >= m.meta) return CATS[k].premio * 2;
-          return 0;
-        }).filter(v => v > 0);
-        if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-        return `<span style="font-weight:900;color:#2d7d32;">R$ ${prizes.reduce((a,b)=>a+b,0)}</span>`;
-      })()}</td>
     `;
     rankingBody.appendChild(tr);
   });
@@ -2873,7 +2833,7 @@ function renderPaymentSummary() {
     if (!list.length) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="7" style="text-align:center;padding:22px;color:#8b5d6b;font-weight:800;">
+          <td colspan="6" style="text-align:center;padding:22px;color:#8b5d6b;font-weight:800;">
             Nenhum operador encontrado para esta loja/mês.
           </td>
         </tr>`;
@@ -2886,25 +2846,6 @@ function renderPaymentSummary() {
     ['agua', 'chantilly', 'shake', 'milk'].forEach(k => {
       const ranked = [...list].filter(o => o[k] > 0).sort((a, b) => b[k] - a[k]);
       winners[k] = ranked.length ? ranked[0].name : null;
-    });
-
-    // ── Prêmios: busca metas da loja para calcular ──────────────────────
-    const PREMIO_BASE  = { agua: 30, chantilly: 30, shake: 50, milk: 50 };
-    const PREMIO_SUPER = { agua: 40, chantilly: 40, shake: 75, milk: 75 };
-    const catMetas = (typeof window.extractStoreMetas === 'function' && storeKey)
-      ? window.extractStoreMetas(storeKey) : null;
-    const catPrize = {};
-    ['agua', 'chantilly', 'shake', 'milk'].forEach(k => {
-      if (!catMetas || !catMetas[k]) { catPrize[k] = null; return; }
-      const { meta, real, super: sup } = catMetas[k];
-      if (!meta || meta <= 0) { catPrize[k] = null; return; }
-      if (real >= (sup || Infinity)) {
-        catPrize[k] = PREMIO_SUPER[k] * 2;  // SuperMeta atingida
-      } else if (real >= meta) {
-        catPrize[k] = PREMIO_BASE[k] * 2;   // Meta atingida
-      } else {
-        catPrize[k] = null;  // Meta não atingida — sem prêmio
-      }
     });
 
     tbody.innerHTML = list.map((op, i) => {
@@ -2926,14 +2867,6 @@ function renderPaymentSummary() {
           <td>${pill('shake', op.shake)}</td>
           <td>${pill('milk', op.milk)}</td>
           <td><strong>${Math.round(op.total || 0)}</strong></td>
-          <td>${(() => {
-            const prizes = ['agua','chantilly','shake','milk']
-              .filter(k => winners[k] === op.name && catPrize[k] !== null)
-              .map(k => catPrize[k]);
-            if (!prizes.length) return '<span style="color:#aaa;">—</span>';
-            const total = prizes.reduce((a,b) => a+b, 0);
-            return `<span style="font-weight:900;color:#2d7d32;">R$ ${total}</span>`;
-          })()}</td>
         </tr>
       `;
     }).join('');
