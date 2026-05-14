@@ -2,9 +2,8 @@ name: BIP360 Indicadores Diários
 
 on:
   schedule:
-    # 05:00 BRT = 08:00 UTC (horário de verão: 04:00 BRT = 07:00 UTC)
-    # Usar 08:00 UTC cobre ambos os cenários com margem.
-    - cron: "0 8 * * *"
+    # 02:00 BRT = 05:00 UTC
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 jobs:
