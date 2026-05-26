@@ -377,11 +377,22 @@ def store_code_from_name(name: str) -> str:
 
 
 def get_active_store_text(page) -> str:
-    """Retorna o nome da loja ativa lendo o span.name da topbar do novo layout BIP360."""
+    """Retorna o nome da loja ativa.
+    No layout do BIP360 ha dois span.name na topbar:
+      [0] = grupo franqueador (ex: 'Grupo CHQ')
+      [1] = loja ativa (ex: 'Curitiba 07 (PR)')
+    Ignoramos o span do grupo e retornamos o da loja.
+    """
     js = """
     () => {
-        const span = document.querySelector('.widgets-item span.name');
-        return span ? (span.innerText || span.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+        const spans = Array.from(document.querySelectorAll('.widgets-item span.name'));
+        for (let i = spans.length - 1; i >= 0; i--) {
+            const txt = (spans[i].innerText || spans[i].textContent || '').replace(/\\s+/g,' ').trim();
+            if (txt && !txt.toLowerCase().includes('grupo')) return txt;
+        }
+        if (spans.length >= 2) return (spans[1].innerText || '').trim();
+        if (spans.length === 1) return (spans[0].innerText || '').trim();
+        return '';
     }
     """
     try:
@@ -684,14 +695,16 @@ def login(page):
 
 
 def open_store_dropdown(page) -> str:
-    """No novo layout do BIP360 a lista .lista-empresas ja esta no DOM sem precisar
-    de clique para abrir. Retorna o nome da loja ativa apenas para log.
-    A selecao real e feita diretamente em click_store_item via PrimeFaces submit.
-    """
+    """Retorna o nome da loja ativa ignorando o span do grupo franqueador."""
     js = """
     () => {
-        const span = document.querySelector('.widgets-item span.name');
-        return span ? span.innerText.trim() : 'not found';
+        const spans = Array.from(document.querySelectorAll('.widgets-item span.name'));
+        for (let i = spans.length - 1; i >= 0; i--) {
+            const txt = (spans[i].innerText || spans[i].textContent || '').replace(/\\s+/g,' ').trim();
+            if (txt && !txt.toLowerCase().includes('grupo')) return txt;
+        }
+        if (spans.length >= 2) return (spans[1].innerText || '').trim();
+        return spans.length ? (spans[0].innerText || '').trim() : 'not found';
     }
     """
     return page.evaluate(js)
