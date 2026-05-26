@@ -837,12 +837,14 @@ def select_store(page, bip_name: str):
         if clicked:
             print(f"  Store click result: {clicked}")
 
+            # Aguarda o BIP360 recarregar a pagina apos o PrimeFaces submit
             try:
-                page.wait_for_load_state("networkidle", timeout=15000)
+                page.wait_for_load_state("load", timeout=30000)
             except Exception:
                 pass
-
+            wait_bip_idle(page, timeout=45)
             time.sleep(2)
+
             after = get_active_store_text(page)
             print(f"  Active store after: {after}")
 
