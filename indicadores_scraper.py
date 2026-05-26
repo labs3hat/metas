@@ -369,14 +369,30 @@ def select_store(page, bip_name: str):
     log.info("  Loja ativa atual: %s | Selecionando: %s", active_now, bip_name)
 
     last_error: str | None = None
+
     for attempt in range(1, 4):
         log.info("  Tentativa %d/3 de selecionar loja...", attempt)
 
         if _click_store_item(page, bip_name):
-            log.info("  Store confirmed: %s", bip_name)
-            return
+            # Aguarda o BIP360 recarregar a pagina apos o PrimeFaces submit
+            try:
+                page.wait_for_load_state("load", timeout=30000)
+            except Exception:
+                pass
+            _wait_bip_idle(page, timeout=45)
+            time.sleep(2)
 
-        last_error = f"Store selection unconfirmed after attempt {attempt}. Expected={bip_name}"
+            after = _open_store_dropdown(page)
+            log.info("  Loja ativa apos selecao: %s", after)
+
+            if _active_store_matches(page, bip_name):
+                log.info("  Store confirmed: %s", bip_name)
+                return
+
+            last_error = f"Store selection unconfirmed after attempt {attempt}. Expected={bip_name}, active={after}"
+        else:
+            last_error = f"Could not click store '{bip_name}'"
+
         _save_debug(page, f"select_attempt_{attempt}_{_slug(bip_name)}")
         time.sleep(2)
 
