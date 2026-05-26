@@ -225,26 +225,11 @@ def _store_code(name: str) -> str:
 
 
 def _get_active_store(page) -> str:
+    """Retorna o nome da loja ativa lendo o span.name da topbar do novo layout BIP360."""
     js = """() => {
-        const visible = (el) => {
-            const s = window.getComputedStyle(el);
-            const r = el.getBoundingClientRect();
-            return s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0;
-        };
-        const KEYWORDS = ['SHOPPING','Shopping','SÃO JOSÉ','SAO JOSE','CURITIBA','MARING','CAMPO LARGO'];
-        const els = Array.from(document.querySelectorAll('a, span, div, button'));
-        const candidates = [];
-        for (const el of els) {
-            if (!visible(el)) continue;
-            const rect = el.getBoundingClientRect();
-            const txt = (el.innerText || el.textContent || '').replace(/\\s+/g,' ').trim();
-            if (!txt || rect.top > 180) continue;
-            if (KEYWORDS.some(k => txt.includes(k)) && !txt.includes('MINHAS FRANQUIAS')) {
-                candidates.push({text: txt, top: rect.top, len: txt.length});
-            }
-        }
-        candidates.sort((a,b) => Math.abs(a.top - b.top) > 20 ? a.top - b.top : a.len - b.len);
-        return candidates.length ? candidates[0].text : '';
+        const span = document.querySelector('.widgets-item span.name');
+        if (span) return (span.innerText || span.textContent || '').replace(/\\s+/g,' ').trim();
+        return '';
     }"""
     try:
         return page.evaluate(js) or ""
@@ -309,25 +294,14 @@ def login(page):
 
 # ── SELEÇÃO DE LOJA ───────────────────────────────────────────────────────────
 def _open_store_dropdown(page) -> str:
+    """
+    No novo layout do BIP360 a lista .lista-empresas ja esta no DOM sem precisar
+    de clique para abrir. Retorna o nome da loja ativa apenas para log.
+    A selecao real e feita diretamente em _click_store_item via PrimeFaces submit.
+    """
     js = """() => {
-        const visible = (el) => {
-            const s = window.getComputedStyle(el);
-            const r = el.getBoundingClientRect();
-            return s.visibility !== 'hidden' && s.display !== 'none' && r.width > 0 && r.height > 0;
-        };
-        const widgets = Array.from(document.querySelectorAll('#topBar .widgets-item.active, .widgets-item.active'));
-        for (const w of widgets) {
-            const name = w.querySelector('span.name');
-            if (name && visible(name)) { name.scrollIntoView(); name.click(); return name.innerText.trim(); }
-        }
-        const names = Array.from(document.querySelectorAll('span.name'));
-        for (const el of names) {
-            const txt = (el.innerText || '').trim();
-            if (!visible(el) || !txt) continue;
-            const KEYS = ['Shopping','SHOPPING','São José','SÃO JOSÉ','Curitiba','CURITIBA','Maring','Campo Largo'];
-            if (KEYS.some(k => txt.includes(k))) { el.scrollIntoView(); el.click(); return txt; }
-        }
-        return 'not found';
+        const span = document.querySelector('.widgets-item span.name');
+        return span ? span.innerText.trim() : 'not found';
     }"""
     return page.evaluate(js)
 
@@ -390,23 +364,20 @@ def select_store(page, bip_name: str):
         log.info("  Store already active: %s", bip_name)
         return
 
+    # No novo layout do BIP360 a lista de lojas ja esta no DOM — vai direto ao click.
+    active_now = _open_store_dropdown(page)
+    log.info("  Loja ativa atual: %s | Selecionando: %s", active_now, bip_name)
+
     last_error: str | None = None
     for attempt in range(1, 4):
-        log.info("  Opening store dropdown... attempt %d/3", attempt)
-        result = _open_store_dropdown(page)
-        log.info("  Dropdown result: %s", result)
-        time.sleep(1.5)
-
-        if result == "not found":
-            last_error = "Could not open store dropdown."
-            _save_debug(page, f"dropdown_not_found_{attempt}")
-            continue
+        log.info("  Tentativa %d/3 de selecionar loja...", attempt)
 
         if _click_store_item(page, bip_name):
             log.info("  Store confirmed: %s", bip_name)
             return
 
-        last_error = f"Store selection unconfirmed. Expected={bip_name}"
+        last_error = f"Store selection unconfirmed after attempt {attempt}. Expected={bip_name}"
+        _save_debug(page, f"select_attempt_{attempt}_{_slug(bip_name)}")
         time.sleep(2)
 
     _save_debug(page, f"could_not_select_{_slug(bip_name)}")
