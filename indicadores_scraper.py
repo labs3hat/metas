@@ -11,7 +11,17 @@ Escreve na aba "Indicadores de Venda YYYY" do ano corrente de D-1:
   - 2027 → aba "Indicadores de Venda 2027" (crie a aba no Sheets antes de jan/2027)
   A troca de aba é automática — o código deriva o nome do ano de D-1.
 
-Roda via GitHub Actions todo dia às 05:00 BRT (08:00 UTC).
+Roda via GitHub Actions diariamente (ver .github/workflows/indicadores_daily.yml).
+
+Comportamento auto-corretivo (backfill)
+───────────────────────────────────────
+A cada execução o scraper lê a planilha e verifica os últimos BACKFILL_DAYS
+dias (padrão 7). Coleta APENAS as combinações loja+dia com célula vazia:
+  - execução normal: só D-1 das 10 lojas;
+  - se algum dia anterior falhou, ele é recuperado automaticamente;
+  - células já preenchidas nunca são recoletadas (idempotente).
+Se ao final restarem pendências, o processo termina com exit code 1 —
+o workflow fica vermelho e o watchdog dispara o reprocessamento.
 
 Estrutura da planilha por mês (confirmada lendo a planilha real)
 ─────────────────────────────────────────────────────────────────
@@ -58,6 +68,10 @@ SHEET_ID          = "1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY"
 # Não precisa alterar este código na virada do ano —
 # basta criar a nova aba no Sheets com o nome correspondente.
 SHEET_TAB_PREFIX  = "Indicadores de Venda"
+
+# Janela de auto-backfill: verifica os últimos N dias na planilha e coleta
+# apenas as combinações loja+dia que estiverem vazias (auto-corretivo).
+BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "7"))
 
 
 def get_sheet_tab(year: int) -> str:
@@ -117,24 +131,30 @@ def br_now() -> datetime:
     return datetime.now(TZ_BR)
 
 
-def get_d1_info():
-    """Retorna informações sobre o dia D-1 no fuso de São Paulo."""
-    now_br = br_now()
-    d1 = now_br - timedelta(days=1)
+def _date_info(d: datetime) -> dict:
+    """Empacota uma data no formato usado pelo restante do código."""
     return {
-        "date": d1,
-        "day": d1.day,
-        "month": d1.month,
-        "year": d1.year,
-        "start": d1.strftime("%d/%m/%Y 00:00"),
-        "end":   d1.strftime("%d/%m/%Y 23:59"),
+        "date": d,
+        "day": d.day,
+        "month": d.month,
+        "year": d.year,
+        "start": d.strftime("%d/%m/%Y 00:00"),
+        "end":   d.strftime("%d/%m/%Y 23:59"),
+        "label": d.strftime("%d/%m/%Y"),
     }
+
+
+def build_dates_window(days: int) -> list[dict]:
+    """Retorna a janela D-1..D-N (mais recente primeiro) no fuso de São Paulo."""
+    now_br = br_now()
+    return [_date_info(now_br - timedelta(days=i)) for i in range(1, days + 1)]
 
 
 # ── DATACLASS DE RESULTADO ────────────────────────────────────────────────────
 @dataclass
 class StoreMetrics:
     store_key: str
+    date: dict           # date_info do dia coletado
     receita: float       # Receitas Totais Líquidas (R$)
     ticket_medio: float  # Ticket Médio Líquido (R$)
     pessoas: int         # Pessoas Atendidas
@@ -472,6 +492,16 @@ def _set_dates(page, start_date: str, end_date: str):
 
 
 def _click_pesquisar(page):
+    # Marca as tabelas atuais como "stale". Quando o PrimeFaces renderizar o
+    # novo resultado, a tabela é substituída e a marca desaparece — assim
+    # _wait_tm_table distingue o resultado novo do anterior (essencial ao
+    # pesquisar várias datas na mesma sessão).
+    try:
+        page.evaluate("""() => {
+            document.querySelectorAll('table, .ui-datatable').forEach(el => { el.__stale = true; });
+        }""")
+    except Exception:
+        pass
     try:
         page.locator("text=Pesquisar").first.click(timeout=15000)
         return
@@ -498,14 +528,20 @@ def _wait_tm_table(page) -> bool:
         try:
             state = page.evaluate("""() => {
                 const body = document.body.innerText || '';
+                const tables = Array.from(document.querySelectorAll('table, .ui-datatable'));
                 return {
                     hasTotais:  body.includes('Totais'),
                     hasTicket:  body.includes('Ticket Médio Líquido') || body.includes('Ticket Medio Liquido'),
                     hasPessoas: body.includes('Pessoas Atendidas'),
-                    hasXls:     !!document.querySelector('img[src*="xls" i], img[src*="excel" i]'),
+                    hasNenhum:  body.includes('Nenhum registro'),
+                    // Alguma tabela sem a marca __stale = resultado novo renderizado
+                    hasFresh:   tables.length === 0 || tables.some(el => !el.__stale),
                 };
             }""")
-            if state.get("hasTotais") and (state.get("hasTicket") or state.get("hasPessoas")):
+            fresh = state.get("hasFresh", True)
+            if fresh and state.get("hasNenhum"):
+                return True  # dia sem vendas: resultado novo, vazio
+            if fresh and state.get("hasTotais") and (state.get("hasTicket") or state.get("hasPessoas")):
                 return True
         except Exception:
             pass
@@ -659,18 +695,17 @@ def _remove_accents(text: str) -> str:
 
 
 # ── COLETA POR LOJA ───────────────────────────────────────────────────────────
-def collect_store(page, store: dict, tmpdir: str, d1: dict) -> StoreMetrics:
+def collect_store_days(
+    page, store: dict, tmpdir: str, dates: list[dict]
+) -> tuple[list[StoreMetrics], list[dict]]:
     """
-    Para a loja já selecionada:
-    1. Abre relatório Ticket Médio Diário
-    2. Preenche data D-1
-    3. Pesquisa
-    4. Exporta XLS
-    5. Faz parse das 3 métricas
+    Para a loja já logada e selecionada, coleta N datas na mesma sessão:
+    abre o relatório uma vez e, para cada data, preenche o período,
+    pesquisa, exporta o XLS e faz parse.
+
+    Retorna (métricas coletadas, datas que falharam).
     """
-    start_date = d1["start"]
-    end_date   = d1["end"]
-    key        = store["key"]
+    key = store["key"]
 
     go_to_tm_report(page)
 
@@ -681,34 +716,48 @@ def collect_store(page, store: dict, tmpdir: str, d1: dict) -> StoreMetrics:
             f"Ativo={_get_active_store(page)}"
         )
 
-    log.info("  Setting TM dates: %s → %s", start_date, end_date)
-    _set_dates(page, start_date, end_date)
-    time.sleep(0.8)
-    _click_pesquisar(page)
+    results: list[StoreMetrics] = []
+    failed_dates: list[dict] = []
 
-    table_ready = _wait_tm_table(page)
-    if not table_ready:
-        log.warning("  TM table not fully confirmed; trying XLS anyway.")
+    for d in dates:
+        try:
+            log.info("  [%s] Coletando %s...", key, d["label"])
+            _set_dates(page, d["start"], d["end"])
+            time.sleep(0.8)
+            _click_pesquisar(page)
 
-    _print_snapshot(page, f"after_tm_search_{key}")
+            if not _wait_tm_table(page):
+                log.warning("  TM table not fully confirmed; trying XLS anyway.")
 
-    try:
-        download = _click_xls(page)
-    except Exception:
-        _save_debug(page, f"xls_not_found_{key}")
-        raise
+            try:
+                download = _click_xls(page)
+            except Exception:
+                _save_debug(page, f"xls_not_found_{key}_{d['year']}{d['month']:02d}{d['day']:02d}")
+                raise
 
-    file_path = os.path.join(tmpdir, f"{key}_tm.xls")
-    download.save_as(file_path)
-    log.info("  Downloaded: %s (%d bytes)", file_path, os.path.getsize(file_path))
+            file_path = os.path.join(
+                tmpdir, f"{key}_tm_{d['year']}{d['month']:02d}{d['day']:02d}.xls"
+            )
+            download.save_as(file_path)
+            log.info("  Downloaded: %s (%d bytes)", file_path, os.path.getsize(file_path))
 
-    metrics = parse_tm_xls(file_path)
-    return StoreMetrics(
-        store_key=key,
-        receita=metrics["receita"],
-        ticket_medio=metrics["ticket_medio"],
-        pessoas=metrics["pessoas"],
-    )
+            metrics = parse_tm_xls(file_path)
+            results.append(StoreMetrics(
+                store_key=key,
+                date=d,
+                receita=metrics["receita"],
+                ticket_medio=metrics["ticket_medio"],
+                pessoas=metrics["pessoas"],
+            ))
+            log.info(
+                "  ✓ %s %s: receita=%.2f TM=%.2f pessoas=%d",
+                key, d["label"], metrics["receita"], metrics["ticket_medio"], metrics["pessoas"],
+            )
+        except Exception as exc:
+            failed_dates.append(d)
+            log.error("  ✗ %s %s: %s", key, d["label"], exc)
+
+    return results, failed_dates
 
 
 # ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
@@ -760,121 +809,206 @@ def _loja_row_index(store_key: str) -> int:
     return LOJA_ORDER.index(store_key)
 
 
-def write_metrics_to_sheet(ws: gspread.Worksheet, metrics: StoreMetrics, d1: dict):
+def _col_letter(n: int) -> str:
+    """Converte índice de coluna 1-indexed em letra A1 (3 → 'C')."""
+    letters = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def read_missing_combos(dates: list[dict], ws_cache: dict) -> dict[str, list[dict]]:
     """
-    Escreve as 3 métricas na coluna do dia D-1 do mês correto.
+    Lê a planilha e retorna {store_key: [date_info, ...]} das combinações
+    loja+dia em que qualquer uma das 3 métricas está vazia.
 
-    Linhas na planilha (1-indexed):
-      Receita     = ROW_BASE_RECEITA + offset_mes + loja_idx
-      Ticket Méd  = ROW_BASE_TM      + offset_mes + loja_idx
-      Pessoas     = ROW_BASE_PA      + offset_mes + loja_idx
+    Faz no máximo 1 batch_get (3 ranges) por mês envolvido na janela —
+    tipicamente 1-2 chamadas de API no total.
     """
-    month = d1["month"]
-    year  = d1["year"]
-    day   = d1["day"]
-    key   = metrics.store_key
+    from collections import defaultdict
 
-    offset    = _row_offset_for_month(month, year)
-    loja_idx  = _loja_row_index(key)
-    col       = _col_for_day(day)
+    by_month: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for d in dates:
+        by_month[(d["year"], d["month"])].append(d)
 
-    row_receita = ROW_BASE_RECEITA + offset + loja_idx
-    row_tm      = ROW_BASE_TM      + offset + loja_idx
-    row_pa      = ROW_BASE_PA      + offset + loja_idx
+    missing: dict[str, list[dict]] = defaultdict(list)
 
-    # Enviamos 3 updates individuais para evitar conflito de range
-    # (cada métrica fica em seções não contíguas).
-    # Receita: arredondada em 2 casas como número
-    ws.update_cell(row_receita, col, round(metrics.receita, 2))
-    ws.update_cell(row_tm,      col, round(metrics.ticket_medio, 2))
-    ws.update_cell(row_pa,      col, metrics.pessoas)
+    for (year, month), dlist in sorted(by_month.items()):
+        if year not in ws_cache:
+            ws_cache[year] = _get_worksheet(year)
+        ws = ws_cache[year]
 
-    log.info(
-        "  → %s dia=%02d: receita=%.2f TM=%.2f pessoas=%d "
-        "(rows %d/%d/%d col %d)",
-        key, day, metrics.receita, metrics.ticket_medio, metrics.pessoas,
-        row_receita, row_tm, row_pa, col,
-    )
+        offset = _row_offset_for_month(month, year)
+        days   = sorted(d["day"] for d in dlist)
+        c1, c2 = _col_for_day(days[0]), _col_for_day(days[-1])
+
+        ranges = []
+        for base in (ROW_BASE_RECEITA, ROW_BASE_TM, ROW_BASE_PA):
+            r1 = base + offset
+            r2 = r1 + len(LOJA_ORDER) - 1
+            ranges.append(f"{_col_letter(c1)}{r1}:{_col_letter(c2)}{r2}")
+
+        blocks = ws.batch_get(ranges)
+
+        for d in dlist:
+            day_off = _col_for_day(d["day"]) - c1
+            for idx, key in enumerate(LOJA_ORDER):
+                vals = []
+                for block in blocks:
+                    row = block[idx] if idx < len(block) else []
+                    v = row[day_off] if day_off < len(row) else ""
+                    vals.append(str(v).strip())
+                if any(v == "" for v in vals):
+                    missing[key].append(d)
+
+    return dict(missing)
+
+
+def write_all_metrics(all_metrics: list[StoreMetrics], ws_cache: dict) -> int:
+    """
+    Escreve todas as métricas coletadas em lote — uma única chamada
+    update_cells por aba de ano. Retorna o número de erros de escrita.
+    """
+    from collections import defaultdict
+    from gspread.cell import Cell
+
+    by_year: dict[int, list[StoreMetrics]] = defaultdict(list)
+    for m in all_metrics:
+        by_year[m.date["year"]].append(m)
+
+    errors = 0
+    for year, items in sorted(by_year.items()):
+        try:
+            if year not in ws_cache:
+                ws_cache[year] = _get_worksheet(year)
+            ws = ws_cache[year]
+
+            cells: list[Cell] = []
+            for m in items:
+                offset   = _row_offset_for_month(m.date["month"], year)
+                loja_idx = _loja_row_index(m.store_key)
+                col      = _col_for_day(m.date["day"])
+                cells.append(Cell(ROW_BASE_RECEITA + offset + loja_idx, col, round(m.receita, 2)))
+                cells.append(Cell(ROW_BASE_TM      + offset + loja_idx, col, round(m.ticket_medio, 2)))
+                cells.append(Cell(ROW_BASE_PA      + offset + loja_idx, col, m.pessoas))
+                log.info(
+                    "  → %s %s: receita=%.2f TM=%.2f pessoas=%d",
+                    m.store_key, m.date["label"], m.receita, m.ticket_medio, m.pessoas,
+                )
+
+            ws.update_cells(cells, value_input_option="USER_ENTERED")
+            log.info("  Gravadas %d células na aba de %d em 1 chamada.", len(cells), year)
+        except Exception as exc:
+            errors += 1
+            log.error("  Erro ao gravar lote do ano %d: %s", year, exc)
+
+    return errors
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    d1 = get_d1_info()
-    log.info("=== BIP360 Indicadores Scraper — D-1: %s/%s/%s ===",
-             d1["day"], d1["month"], d1["year"])
-    log.info("Período: %s → %s", d1["start"], d1["end"])
+    window = build_dates_window(BACKFILL_DAYS)
+    log.info(
+        "=== BIP360 Indicadores Scraper — janela %s..%s (%d dias) ===",
+        window[-1]["label"], window[0]["label"], BACKFILL_DAYS,
+    )
 
-    ws = _get_worksheet(d1["year"])
+    # 1. Lê a planilha e detecta o que falta (idempotente / auto-corretivo)
+    ws_cache: dict[int, gspread.Worksheet] = {}
+    missing = read_missing_combos(window, ws_cache)
 
-    success_count = 0
-    error_count   = 0
+    total_pend = sum(len(v) for v in missing.values())
+    if total_pend == 0:
+        log.info("Planilha completa nos últimos %d dias. Nada a coletar.", BACKFILL_DAYS)
+        return
+
+    for key, dlist in missing.items():
+        log.info("Pendências %s: %s", key, ", ".join(d["label"] for d in dlist))
+    log.info("Total de pendências: %d combinações loja+dia", total_pend)
+
+    # 2. Coleta apenas o que falta — 1 login por loja, N datas por sessão,
+    #    com uma segunda tentativa (sessão nova) para as datas que falharem.
     all_metrics: list[StoreMetrics] = []
+    unresolved: list[tuple[str, str, str]] = []  # (store_key, date_label, motivo)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
 
             for store in LOJAS:
-                log.info("\n--- %s : %s ---", store["key"].upper(), store["bip_name"])
-                context = None
-                page    = None
+                pending_dates = missing.get(store["key"])
+                if not pending_dates:
+                    continue
 
-                try:
-                    context = browser.new_context(
-                        accept_downloads=True,
-                        viewport={"width": 1600, "height": 1000},
-                    )
-                    page = context.new_page()
-                    page.set_default_timeout(30000)
+                log.info("\n--- %s : %s (%d dia(s) pendente(s)) ---",
+                         store["key"].upper(), store["bip_name"], len(pending_dates))
 
-                    login(page)
-                    select_store(page, store["bip_name"])
+                for attempt in (1, 2):
+                    if not pending_dates:
+                        break
+                    if attempt == 2:
+                        log.info("  Retry (sessão nova) para %d data(s) de %s...",
+                                 len(pending_dates), store["key"])
 
-                    metrics = collect_store(page, store, tmpdir, d1)
-                    all_metrics.append(metrics)
-                    log.info(
-                        "  ✓ %s: receita=%.2f TM=%.2f pessoas=%d",
-                        store["key"], metrics.receita, metrics.ticket_medio, metrics.pessoas,
-                    )
-                    success_count += 1
+                    context = None
+                    page    = None
+                    try:
+                        context = browser.new_context(
+                            accept_downloads=True,
+                            viewport={"width": 1600, "height": 1000},
+                        )
+                        page = context.new_page()
+                        page.set_default_timeout(30000)
 
-                except PlaywrightTimeout as exc:
-                    error_count += 1
-                    log.error("  Timeout %s: %s", store["key"], exc)
-                    if page:
-                        _save_debug(page, f"timeout_{store['key']}")
+                        login(page)
+                        select_store(page, store["bip_name"])
 
-                except Exception as exc:
-                    error_count += 1
-                    log.error("  Erro %s: %s", store["key"], exc)
-                    if page:
-                        _save_debug(page, f"error_{store['key']}")
+                        results, failed = collect_store_days(
+                            page, store, tmpdir, pending_dates
+                        )
+                        all_metrics.extend(results)
+                        pending_dates = failed
 
-                finally:
-                    if context:
-                        context.close()
+                    except PlaywrightTimeout as exc:
+                        log.error("  Timeout %s: %s", store["key"], exc)
+                        if page:
+                            _save_debug(page, f"timeout_{store['key']}")
+                    except Exception as exc:
+                        log.error("  Erro %s: %s", store["key"], exc)
+                        if page:
+                            _save_debug(page, f"error_{store['key']}")
+                    finally:
+                        if context:
+                            context.close()
+
+                for d in pending_dates:
+                    unresolved.append((store["key"], d["label"], "falha na coleta após retry"))
 
             browser.close()
 
-    # Escreve todos os resultados no Sheets em sequência (após fechar o browser)
+    # 3. Escrita em lote (1 chamada de API por aba de ano)
     log.info("\n--- Escrevendo no Google Sheets ---")
     sheet_errors = 0
-    for m in all_metrics:
-        try:
-            write_metrics_to_sheet(ws, m, d1)
-        except Exception as exc:
-            sheet_errors += 1
-            log.error("  Erro ao gravar %s: %s", m.store_key, exc)
+    if all_metrics:
+        sheet_errors = write_all_metrics(all_metrics, ws_cache)
 
-    # Resumo final
+    # 4. Resumo e exit code — pendência restante = falha do workflow,
+    #    para que o watchdog dispare o reprocessamento automático.
     log.info(
-        "\n=== Concluído: browser=%d ok / %d erros | sheets=%d erros ===",
-        success_count, error_count, sheet_errors,
+        "\n=== Concluído: coletadas=%d | pendentes=%d | sheets=%d erro(s) de lote ===",
+        len(all_metrics), len(unresolved), sheet_errors,
     )
 
-    if success_count == 0:
+    if unresolved:
+        for key, label, motivo in unresolved:
+            log.error("  PENDENTE: %s %s (%s)", key, label, motivo)
+
+    if unresolved or sheet_errors:
         raise RuntimeError(
-            "Nenhuma loja processada com sucesso. Verifique os logs e artifacts de debug."
+            f"{len(unresolved)} combinação(ões) loja+dia sem dados e "
+            f"{sheet_errors} erro(s) de escrita. O watchdog irá reprocessar; "
+            f"as células já preenchidas não serão recoletadas."
         )
 
 
