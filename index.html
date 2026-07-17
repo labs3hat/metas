@@ -787,6 +787,10 @@
     <span style="font-size:18px;">✅</span>
     <span>Dados automáticos do BIP360 — atualizado até D-1 na planilha.</span>
   </div>
+  <div id="hist-alert-banner" style="display:none;background:linear-gradient(135deg,#b71c1c,#d84315);padding:10px 22px;align-items:center;gap:10px;font-size:13px;font-weight:700;color:white;">
+    <span style="font-size:18px;">⚠️</span>
+    <span id="hist-alert-text"></span>
+  </div>
   <div class="team-dash-header">
       <div style="font-size:22px;">📊</div>
       <div>
@@ -1564,6 +1568,30 @@ function renderDashboard() {
   const _banner = document.getElementById('closed-month-banner');
   if (_banner) _banner.style.display = isMonthClosed() ? 'flex' : 'none';
 
+  // Alerta de atualização: dias sem dados na janela D-1..D-7 (só no mês corrente)
+  const _histAlert = document.getElementById('hist-alert-banner');
+  if (_histAlert) {
+    const _missing = isMonthClosed() ? [] : (getHistMissingDates(storeKey) || []);
+    const _alertText = document.getElementById('hist-alert-text');
+    if (_missing.length && _alertText) {
+      const _d1Short = getD1Label().slice(0,5);
+      if (_missing.includes(_d1Short)) {
+        const _outros = _missing.filter(x => x !== _d1Short);
+        _alertText.textContent =
+          `Atualização automática pendente: sem dados de ontem (${_d1Short})` +
+          (_outros.length ? ` e de ${_outros.join(', ')}` : '') +
+          `. Os números desta loja podem estar desatualizados.`;
+      } else {
+        _alertText.textContent =
+          `Sem dados de vendas desta loja nos dias: ${_missing.join(', ')}. ` +
+          `A atualização automática pode ter falhado nesses dias.`;
+      }
+      _histAlert.style.display = 'flex';
+    } else {
+      _histAlert.style.display = 'none';
+    }
+  }
+
   // Totals from ops
   const totals = { shake:0, chantilly:0, agua:0, milk:0 };
   if (isMonthClosed()) {
@@ -2255,6 +2283,7 @@ async function fetchHistoricoVendas() {
 
     const rows = parseCSV(text).slice(1); // skip header
     const hist = {};
+    const histDates = {}; // storeKey -> Set('DD/MM/YYYY') para checagem de completude
 
     // Col: A=Loja, B=Data, C=Shake, D=Chantilly, E=Água, F=MS500, G=Canecake
     const STORE_KEYS_HIST = {
@@ -2282,6 +2311,8 @@ async function fetchHistoricoVendas() {
       }
 
       if (!hist[lojaKey]) hist[lojaKey] = {};
+      if (!histDates[lojaKey]) histDates[lojaKey] = new Set();
+      histDates[lojaKey].add(dataRaw);
       Object.entries(CAT_COLS_HIST).forEach(([cat, col]) => {
         if (!hist[lojaKey][cat]) hist[lojaKey][cat] = [];
         hist[lojaKey][cat].push({ d: dLabel, v: parseNum(row[col]), raw: row[1] });
@@ -2301,10 +2332,28 @@ async function fetchHistoricoVendas() {
       });
     });
     window.__histData = hist;
+    window.__histDates = histDates;
     console.log('[Hist] Loaded', Object.keys(hist).length, 'stores');
   } catch(e) {
     console.warn('[Hist] Failed to load historico:', e);
   }
+}
+
+// Retorna as datas (DD/MM) da janela D-1..D-7 sem dados no Historico Vendas
+// para a loja, ou null se o histórico ainda não foi carregado.
+function getHistMissingDates(storeKey) {
+  const present = (window.__histDates || {})[storeKey];
+  if (!present) return null;
+  const missing = [];
+  const now = new Date();
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    const full = String(d.getDate()).padStart(2,'0') + '/' +
+                 String(d.getMonth()+1).padStart(2,'0') + '/' + d.getFullYear();
+    if (!present.has(full)) missing.push(full.slice(0,5));
+  }
+  return missing;
 }
 
 </script>
