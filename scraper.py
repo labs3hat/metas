@@ -583,12 +583,31 @@ def save_hist_data(ws_hist, header: list, data_rows: list):
             return (r[0], 0, 0, 0)
     kept.sort(key=sort_key)
 
-    final_values = [header] + kept
+    # CORREÇÃO CRÍTICA: get_all_values() devolve tudo como texto. Regravar
+    # essas linhas com RAW faz o Sheets armazená-las como string (apóstrofo,
+    # ex: '23), e o gráfico "Últimos 7 dias" do dashboard ignora células de
+    # texto — só o dia recém-adicionado (int) aparecia. Normalizamos as
+    # colunas numéricas (C:G) para int antes de gravar, como já é feito em
+    # update_operadores.
+    normalized = []
+    for r in kept:
+        r = list(r) + [""] * (7 - len(r))
+        normalized.append([
+            str(r[0]).strip(),
+            str(r[1]).strip(),
+            clean_int_for_sheet(r[2]),
+            clean_int_for_sheet(r[3]),
+            clean_int_for_sheet(r[4]),
+            clean_int_for_sheet(r[5]),
+            clean_int_for_sheet(r[6]),
+        ])
+
+    final_values = [header] + normalized
     ws_hist.clear()
     if len(final_values) > 1:
         ws_hist.update("A1", final_values, value_input_option="RAW")
 
-    print(f"  Histórico salvo: {len(kept)} linhas" +
+    print(f"  Histórico salvo: {len(normalized)} linhas" +
           (f" ({removed} antigas removidas)" if removed else ""))
 
 
@@ -1808,6 +1827,75 @@ def parse_xls(file_path: str) -> dict:
     return {k: int(v) for k, v in totals.items()}
 
 
+# ── PROCESSAMENTO DE UMA LOJA ─────────────────────────────────────────────────
+def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
+                  hist_days, hist_data_rows, existing_hist_dates):
+    """
+    Processa uma loja já com browser/página abertos:
+      1. login + seleção de loja
+      2. metas do mês (realizado) + operadores
+      3. histórico diário D-1..D-7 (idempotente: pula datas já gravadas)
+      4. ticket médio mensal
+
+    Levanta exceção se o essencial (login/seleção/metas do mês) falhar,
+    para acionar o retry. Falhas isoladas de dias do histórico não
+    abortam a loja — ficam pendentes para a próxima execução.
+    """
+    login(page)
+    select_store(page, store["bip_name"])
+
+    # ── Metas do mês (acumulado) — sempre recoletado ──
+    file_path = download_xls(page, store, tmpdir)
+    if not file_path or not os.path.exists(file_path):
+        raise Exception("No XLS file downloaded.")
+
+    totals, operators = parse_xls_by_operator(file_path, store["key"])
+    print(f"  Totals: {totals}")
+    print(f"  Operators parsed: {len(operators)}")
+
+    update_realizado(ws_gsheet, store["key"], totals)
+    update_operadores(ws_op, store["key"], operators)
+
+    # ── Histórico diário: coleta só as datas ainda ausentes ──
+    hist_pending = 0
+    for hist_date in hist_days:
+        if (store["key"], hist_date) in existing_hist_dates:
+            print(f"  ↷ {store['key']} {hist_date} já existe")
+            continue
+        hd, hm, hy = hist_date.split("/")
+        day_start = f"{hd}/{hm}/{hy} 00:00:00"
+        day_end   = f"{hd}/{hm}/{hy} 23:59:59"
+        print(f"  📅 Baixando histórico {store['key']} {hist_date}...")
+        try:
+            hist_file = download_xls_daterange(
+                page, store, tmpdir, day_start, day_end, suffix=f"_hist_{hd}{hm}"
+            )
+            if hist_file and os.path.exists(hist_file):
+                _, hist_ops = parse_xls_by_operator(hist_file)
+                hist_totals = {
+                    cat: sum(op.get(cat, 0) for op in hist_ops.values())
+                    for cat in ["shake", "chantilly", "agua", "milk", "canecake"]
+                }
+                add_hist_row(hist_data_rows, existing_hist_dates,
+                             store["key"], hist_date, hist_totals)
+            else:
+                # Sem vendas nesse dia — grava zeros para não retentar
+                add_hist_row(hist_data_rows, existing_hist_dates,
+                             store["key"], hist_date,
+                             {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0})
+        except Exception as he:
+            hist_pending += 1
+            print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
+
+    # ── Ticket Médio mensal ──
+    tm_file_path = download_tm_xls(page, store, tmpdir)
+    tm_value = parse_ticket_medio_xls(tm_file_path)
+    print(f"  Ticket Médio Realizado: {tm_value:.2f}")
+    update_ticket_medio(ws_tm, store["key"], tm_value)
+
+    return hist_pending
+
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"=== BIP360 Scraper — {br_now().strftime('%d/%m/%Y %H:%M')} BRT ===")
@@ -1826,13 +1914,14 @@ def main():
     print(f"Histórico: {len(hist_data_rows)} linhas existentes, {len(existing_hist_dates)} combinações loja+data")
 
     # Build list of last 7 days (D-1 to D-7) in DD/MM/YYYY
-    from datetime import timedelta, date as date_type
-    now_brt = datetime.now()
+    from datetime import timedelta
+    now_brt = br_now()
     hist_days = [(now_brt - timedelta(days=i)).strftime("%d/%m/%Y") for i in range(1, 8)]
     print(f"Dias a verificar: {hist_days}")
 
-    success_count = 0
-    error_count = 0
+    ok_stores = []
+    failed_stores = []          # lojas cujo essencial falhou mesmo após retry
+    hist_pending_total = 0
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with sync_playwright() as pw:
@@ -1840,91 +1929,78 @@ def main():
 
             for store in LOJAS:
                 print(f"\n--- {store['key'].upper()} : {store['bip_name']} ---")
-                context = None
-                page = None
 
-                try:
-                    context = browser.new_context(
-                        accept_downloads=True,
-                        viewport={"width": 1600, "height": 1000},
-                    )
-                    page = context.new_page()
-                    page.set_default_timeout(30000)
+                store_done = False
+                last_error = None
 
-                    login(page)
-                    select_store(page, store["bip_name"])
+                for attempt in (1, 2):
+                    if attempt == 2:
+                        print(f"  ↻ Retry (sessão nova) para {store['key']}...")
 
-                    file_path = download_xls(page, store, tmpdir)
-                    if not file_path or not os.path.exists(file_path):
-                        raise Exception("No XLS file downloaded.")
+                    context = None
+                    page = None
+                    try:
+                        context = browser.new_context(
+                            accept_downloads=True,
+                            viewport={"width": 1600, "height": 1000},
+                        )
+                        page = context.new_page()
+                        page.set_default_timeout(30000)
 
-                    totals, operators = parse_xls_by_operator(file_path, store['key'])
-                    print(f"  Totals: {totals}")
-                    print(f"  Operators parsed: {len(operators)}")
+                        hist_pending = process_store(
+                            page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
+                            hist_days, hist_data_rows, existing_hist_dates,
+                        )
+                        hist_pending_total += hist_pending
+                        ok_stores.append(store["key"])
+                        store_done = True
 
-                    update_realizado(ws_gsheet, store["key"], totals)
-                    update_operadores(ws_op, store["key"], operators)
+                    except PlaywrightTimeout as e:
+                        last_error = f"Timeout: {e}"
+                        print(f"  ⚠️  Timeout for {store['key']}: {e}")
+                        if page:
+                            save_debug(page, f"timeout_{store['key']}_try{attempt}")
+                    except Exception as e:
+                        last_error = str(e)
+                        print(f"  ⚠️  Error for {store['key']}: {e}")
+                        if page:
+                            save_debug(page, f"error_{store['key']}_try{attempt}")
+                    finally:
+                        if context:
+                            context.close()
 
-                    # ── Historico Vendas: download dia a dia (in-memory) ──
-                    for hist_date in hist_days:
-                        if (store["key"], hist_date) in existing_hist_dates:
-                            print(f"  ↷ {store['key']} {hist_date} já existe")
-                            continue
-                        hd, hm, hy = hist_date.split("/")
-                        day_start = f"{hd}/{hm}/{hy} 00:00:00"
-                        day_end   = f"{hd}/{hm}/{hy} 23:59:59"
-                        print(f"  📅 Baixando histórico {store['key']} {hist_date}...")
-                        try:
-                            hist_file = download_xls_daterange(page, store, tmpdir, day_start, day_end, suffix=f"_hist_{hd}{hm}")
-                            if hist_file and os.path.exists(hist_file):
-                                _, hist_ops = parse_xls_by_operator(hist_file)
-                                hist_totals = {cat: sum(op.get(cat,0) for op in hist_ops.values()) for cat in ["shake","chantilly","agua","milk","canecake"]}
-                                add_hist_row(hist_data_rows, existing_hist_dates, store["key"], hist_date, hist_totals)
-                            else:
-                                # No sales this day — record zeros so we don't retry
-                                add_hist_row(hist_data_rows, existing_hist_dates, store["key"], hist_date,
-                                             {"shake":0,"chantilly":0,"agua":0,"milk":0,"canecake":0})
-                        except Exception as he:
-                            print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
+                    if store_done:
+                        break
 
-                    # Ticket Médio Diário → aba Metas TM suporte
-                    tm_file_path = download_tm_xls(page, store, tmpdir)
-                    tm_value = parse_ticket_medio_xls(tm_file_path)
-                    print(f"  Ticket Médio Realizado: {tm_value:.2f}")
-                    update_ticket_medio(ws_tm, store["key"], tm_value)
-
-                    success_count += 1
-
-                except PlaywrightTimeout as e:
-                    error_count += 1
-                    print(f"  ⚠️  Timeout for {store['key']}: {e}")
-                    if page:
-                        save_debug(page, f"timeout_{store['key']}")
-                        print_page_snapshot(page, f"timeout_{store['key']}")
-
-                except Exception as e:
-                    error_count += 1
-                    print(f"  ⚠️  Error for {store['key']}: {e}")
-                    if page:
-                        save_debug(page, f"error_{store['key']}")
-                        print_page_snapshot(page, f"error_{store['key']}")
-
-                finally:
-                    if context:
-                        context.close()
+                if not store_done:
+                    failed_stores.append((store["key"], last_error))
 
             browser.close()
 
     # Persist all historico changes in one batch write (prune + save)
+    save_error = None
     try:
         save_hist_data(ws_hist, hist_header, hist_data_rows)
     except Exception as pe:
+        save_error = str(pe)
         print(f"  ⚠️ Save historico falhou: {pe}")
 
-    print(f"\n=== Done! Success: {success_count} | Errors: {error_count} ===")
+    # ── Resumo ──
+    print(f"\n=== Done! Lojas OK: {len(ok_stores)}/{len(LOJAS)} "
+          f"| Lojas com falha: {len(failed_stores)} "
+          f"| Dias de histórico pendentes: {hist_pending_total} ===")
+    for key, err in failed_stores:
+        print(f"  ✗ LOJA PENDENTE: {key} ({err})")
 
-    if success_count == 0:
-        raise RuntimeError("Nenhuma loja foi processada com sucesso. Verifique os logs acima.")
+    # Exit code: qualquer loja essencial falha, histórico pendente ou erro de
+    # escrita deixa o workflow vermelho para o watchdog reprocessar.
+    if failed_stores or save_error or hist_pending_total:
+        raise RuntimeError(
+            f"{len(failed_stores)} loja(s) sem dados, "
+            f"{hist_pending_total} dia(s) de histórico pendente(s)"
+            f"{', erro ao salvar histórico' if save_error else ''}. "
+            f"O watchdog irá reprocessar."
+        )
 
 
 if __name__ == "__main__":
