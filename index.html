@@ -2433,9 +2433,10 @@ const DESP_STORE_PREFIXES = [
   { key:'mga8',   prefix:'MGA 8' },
 ];
 
-// 'jul-2026' (formato usado no seletor de mês) → 'jul.-26' (formato da aba)
+// Aceita tanto 'jul-2026' quanto a versão normalizada 'jul2026' (sem hífen,
+// que é o que getSelectedMonthKey() retorna via normalizeKeyText).
 function monthKeyToDespFormat(monthKey) {
-  const m = String(monthKey || '').match(/^([a-z]{3})-(\d{4})$/i);
+  const m = String(monthKey || '').match(/^([a-z]{3})-?(\d{4})$/i);
   if (!m) return '';
   return `${m[1].toLowerCase()}.-${m[2].slice(-2)}`;
 }
