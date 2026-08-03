@@ -230,6 +230,17 @@
   .status-meta      { background:var(--green-light); color:var(--green); }
   .status-close     { background:#fff3e0; color:#e65100; }
   .status-behind    { background:var(--red-light); color:var(--red); }
+
+  /* Desperdício Bebida Láctea — classificação Ouro/Prata/Bronze/Sem premiação */
+  .desp-ouro   { background:linear-gradient(135deg,#FFE9A6,#F5C242); color:#5a4200; }
+  .desp-prata  { background:linear-gradient(135deg,#E6E9EE,#B6BCC7); color:#3a3f47; }
+  .desp-bronze { background:linear-gradient(135deg,#E8C39E,#C3854B); color:#4a2c0f; }
+  .desp-none   { background:var(--red-light); color:var(--red); }
+
+  /* Pesagem Balança — classificação Crítico/Aceitável/Ideal */
+  .bal-critico   { background:var(--red-light); color:var(--red); }
+  .bal-aceitavel { background:#fff3e0; color:#e65100; }
+  .bal-ideal     { background:var(--green-light); color:var(--green); }
   .status-nodata    { background:var(--bg); color:var(--muted); }
 
   /* remaining label */
@@ -800,6 +811,7 @@
       <div class="store-pill" id="dash-store-pill">—</div>
     </div>
     <div class="team-cats" id="team-cats"></div>
+    <div class="team-cats" id="team-cats-quality" style="margin-top:12px;"></div>
   </div>
 
   <!-- Ticket Médio Dashboard -->
@@ -930,6 +942,7 @@ const SHEET_TAB_TM = 'Metas Ticket Medio';
 // GIDs for each tab
 const GID_OP   = '154705838';  // Metas Operacionais
 const GID_HIST = '1927848386'; // Historico Vendas (últimos 3 meses, por dia/loja)
+const GID_DESP = '2023848331'; // Desperdício+Balança (Desperdício Bebida Láctea + Pesagem Balança, semanal)
 const GID_TMS = '76128240';    // Metas TM suporte (clean sheet — MetaTM + RealTM)
 const GID_OPERADOR = '786119570'; // Metas Operador suporte
 
@@ -960,7 +973,8 @@ const TMS_STORE_ROW = {
 // Products at startCol+0(Shake), +1(Chantilly), +2(Água), +3(MS500)
 
 const MONTH_MAP = {
-  // 5 colunas por mês: Shake(+0), Chantilly(+1), Água(+2), MS500(+3), Canecake(+4)
+  // 5 colunas por mês na planilha: Shake(+0), Chantilly(+1), Água(+2), MS500(+3), Canecake(+4)
+  // Canecake não é mais exibido no dashboard — a coluna col+4 é ignorada de propósito.
   'jan-2026': 2,  'fev-2026': 7,  'mar-2026': 12, 'abr-2026': 17,
   'mai-2026': 22, 'jun-2026': 27, 'jul-2026': 32, 'ago-2026': 37,
   'set-2026': 42, 'out-2026': 47, 'nov-2026': 52, 'dez-2026': 57,
@@ -1024,9 +1038,8 @@ const CATS = {
   chantilly: { label:'Chantilly',      emoji:'🍦', premio:30, offset:1 },
   agua:      { label:'Água',           emoji:'💧', premio:30, offset:2 },
   milk:      { label:'Milk Shake 500', emoji:'🥛', premio:50, offset:3 },
-  canecake:  { label:'Canecake',       emoji:'🧁', premio:0,  offset:4, noMeta:true },
 };
-const CAT_KEYS = ['shake','chantilly','agua','milk','canecake'];
+const CAT_KEYS = ['shake','chantilly','agua','milk'];
 
 // ── STATE ───────────────────────────────────────────────────────────────────
 let sheetData     = null;   // raw CSV rows - Metas Operacionais
@@ -1112,6 +1125,7 @@ async function fetchSheetMetas() {
 
   // Fetch histórico de vendas diárias
   await fetchHistoricoVendas();
+  await fetchDesperdicioBalanca();
 
   populateMonthSelector();
 
@@ -1162,6 +1176,15 @@ function parseNum(v) {
   return parseFloat(s) || 0;
 }
 
+// Parseia percentuais preservando o sinal negativo (parseNum descarta o "-").
+// Retorna null para célula vazia, para diferenciar "sem dado" de "0%".
+function parsePercent(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const s = String(v).trim().replace('%', '').replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
 function extractStoreMetas(storeKey) {
   if (!sheetData || !selectedMonth) return null;
   const cfg = STORE_MAP[storeKey];
@@ -1178,7 +1201,6 @@ function extractStoreMetas(storeKey) {
   const realChant    = realRow ? parseNum(realRow[startCol+1]) : 0;
   const realAgua     = realRow ? parseNum(realRow[startCol+2]) : 0;
   const realMilk     = realRow ? parseNum(realRow[startCol+3]) : 0;
-  const realCanecake = realRow ? parseNum(realRow[startCol+4]) : 0;
 
   const monthClosed = realShake > 0 || realChant > 0 || realAgua > 0 || realMilk > 0;
 
@@ -1188,7 +1210,6 @@ function extractStoreMetas(storeKey) {
     chantilly: { meta: parseNum(metaRow[startCol+1]), super: parseNum(superRow[startCol+1]), real: realChant    },
     agua:      { meta: parseNum(metaRow[startCol+2]), super: parseNum(superRow[startCol+2]), real: realAgua     },
     milk:      { meta: parseNum(metaRow[startCol+3]), super: parseNum(superRow[startCol+3]), real: realMilk     },
-    canecake:  { meta: parseNum(metaRow[startCol+4]), super: parseNum(superRow[startCol+4]), real: realCanecake },
   };
 }
 
@@ -1685,13 +1706,6 @@ function renderDashboard() {
       </div>`;
     })() : '';
 
-    // ── Canecake: sem meta definida ───────────────────────────────────
-    const isCanecake = (info.noMeta === true);
-    const noMetaHTML = isCanecake && !hasMeta ? `
-      <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--muted);font-weight:700;margin-top:6px;">
-        Sem meta definida para este mês
-      </div>` : '';
-
     const div = document.createElement('div');
     div.className = 'team-cat';
     div.innerHTML = `
@@ -1712,12 +1726,6 @@ function renderDashboard() {
           </div>` : ''}
         </div>` : ''}
       </div>
-      ${isCanecake && !hasMeta ? `
-        <div style="font-size:22px;font-weight:900;color:var(--muted);">${real}</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">vendas acumuladas</div>
-        ${noMetaHTML}
-        ${histHTML}
-      ` : `
       <div class="tc-numbers">
         <span class="tc-realized" style="color:${barColor};">${real}</span>
         <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">${isMonthClosed()?'realiz.':'acum.'}</span>
@@ -1744,9 +1752,79 @@ function renderDashboard() {
         </div>` : ''}
       `}
       ${histHTML}
-      `}
     `;
     container.appendChild(div);
+  });
+
+  renderQualityCats(storeKey);
+}
+
+// ── Cards de qualidade: Desperdício Bebida Láctea + Pesagem Balança ────────
+function renderQualityCats(storeKey) {
+  const qContainer = document.getElementById('team-cats-quality');
+  if (!qContainer) return;
+  qContainer.innerHTML = '';
+
+  const monthFmt = monthKeyToDespFormat(getSelectedMonthKey());
+  const storeData = (window.__despBalData || {})[storeKey];
+  const monthData = storeData ? storeData[monthFmt] : null;
+
+  const cards = [
+    {
+      key: 'desperdicio', emoji: '🥛', label: 'Desperdício Bebida Láctea',
+      entry: monthData ? monthData.desperdicio : null,
+      classify: classifyDesperdicio,
+      helpText: 'Ouro ≤5% · Prata ≤10% · Bronze ≤15% · acima disso, sem premiação',
+    },
+    {
+      key: 'balanca', emoji: '⚖️', label: 'Pesagem Balança',
+      entry: monthData ? monthData.balanca : null,
+      classify: classifyBalanca,
+      helpText: 'Crítico <50% · Aceitável 50–80% · Ideal acima de 80%',
+    },
+  ];
+
+  cards.forEach(card => {
+    const entry = card.entry;
+    const media = entry ? entry.media : null;
+    const badge = card.classify(media);
+    const weeks = entry ? entry.weeks : [];
+
+    const weeksHTML = weeks.length > 0 ? (() => {
+      const bars = weeks.map(w => `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;">
+          <div style="font-size:9px;font-weight:700;color:var(--text);">${w.v.toFixed(0)}%</div>
+          <div style="height:${Math.max(3, Math.min(40, Math.abs(w.v) * 1.2))}px;width:100%;border-radius:2px 2px 0 0;background:#378ADD;"></div>
+          <div style="font-size:9px;color:var(--muted);">${w.d}</div>
+        </div>`).join('');
+      return `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px;">
+        <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Semanas do mês</div>
+        <div style="display:flex;gap:3px;align-items:flex-end;">${bars}</div>
+      </div>`;
+    })() : '';
+
+    const div = document.createElement('div');
+    div.className = 'team-cat';
+    div.innerHTML = `
+      <div class="tc-head">
+        <span class="tc-emoji">${card.emoji}</span>
+        <span class="tc-label">${card.label}</span>
+      </div>
+      ${media !== null ? `
+        <div class="tc-numbers">
+          <span class="tc-realized" style="color:var(--text);">${media.toFixed(2)}%</span>
+          <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">média do mês</span>
+        </div>
+        ${badge ? `<div class="tc-status ${badge.cls}">${badge.label}</div>` : ''}
+      ` : `
+        <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--muted);font-weight:700;margin-top:6px;">
+          Sem dados lançados para este mês
+        </div>
+      `}
+      <div style="font-size:10px;color:var(--muted);margin-top:8px;">${card.helpText}</div>
+      ${weeksHTML}
+    `;
+    qContainer.appendChild(div);
   });
 }
 
@@ -2285,12 +2363,12 @@ async function fetchHistoricoVendas() {
     const hist = {};
     const histDates = {}; // storeKey -> Set('DD/MM/YYYY') para checagem de completude
 
-    // Col: A=Loja, B=Data, C=Shake, D=Chantilly, E=Água, F=MS500, G=Canecake
+    // Col: A=Loja, B=Data, C=Shake, D=Chantilly, E=Água, F=MS500
     const STORE_KEYS_HIST = {
       'sjp1':'sjp1','ctba3':'ctba3','ctba5':'ctba5','cl2':'cl2','ctba7q':'ctba7q',
       'ctba11':'ctba11','mga3':'mga3','mga5':'mga5','mga7':'mga7','mga8':'mga8'
     };
-    const CAT_COLS_HIST = { shake:2, chantilly:3, agua:4, milk:5, canecake:6 };
+    const CAT_COLS_HIST = { shake:2, chantilly:3, agua:4, milk:5 };
 
     rows.forEach(row => {
       const lojaRaw = (row[0]||'').trim();
@@ -2337,6 +2415,112 @@ async function fetchHistoricoVendas() {
   } catch(e) {
     console.warn('[Hist] Failed to load historico:', e);
   }
+}
+
+// ── Desperdício Bebida Láctea + Pesagem Balança ────────────────────────────
+// Aba "Desperdício+Balança": linhas em pares por loja (Desperdício / Pesagem),
+// colunas semanais agrupadas por mês, com "Média Mês" ao final de cada bloco.
+const DESP_STORE_PREFIXES = [
+  { key:'sjp1',   prefix:'SJP 1' },
+  { key:'ctba3',  prefix:'CTBA 3' },
+  { key:'ctba5',  prefix:'CTBA 5' },
+  { key:'cl2',    prefix:'CL 2' },
+  { key:'ctba7q', prefix:'CTBA 7' },
+  { key:'ctba11', prefix:'CTBA 11' },
+  { key:'mga3',   prefix:'MGA 3' },
+  { key:'mga5',   prefix:'MGA 5' },
+  { key:'mga7',   prefix:'MGA 7' },
+  { key:'mga8',   prefix:'MGA 8' },
+];
+
+// 'jul-2026' (formato usado no seletor de mês) → 'jul.-26' (formato da aba)
+function monthKeyToDespFormat(monthKey) {
+  const m = String(monthKey || '').match(/^([a-z]{3})-(\d{4})$/i);
+  if (!m) return '';
+  return `${m[1].toLowerCase()}.-${m[2].slice(-2)}`;
+}
+
+async function fetchDesperdicioBalanca() {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${GID_DESP}&cacheBust=${Date.now()}`;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    const text = await res.text();
+    if (!text || !text.includes(',')) return;
+
+    const rows = parseCSV(text);
+    if (rows.length < 3) return;
+
+    const monthRow = rows[0];   // ex: '', '', 'jan.-26', 'jan.-26', ...
+    const dateRow  = rows[1];   // ex: 'Loja','Tipo','05/01/2026',...,'Média Mês',...
+
+    // Monta blocos: agrupa colunas consecutivas com o mesmo rótulo de mês.
+    // A última coluna de cada bloco é "Média Mês".
+    const blocks = []; // { monthFmt, weekCols:[colIdx,...], mediaCol }
+    let col = 2;
+    while (col < monthRow.length) {
+      const label = (monthRow[col] || '').trim();
+      if (!label) { col++; continue; }
+      const cols = [];
+      while (col < monthRow.length && (monthRow[col] || '').trim() === label) {
+        cols.push(col);
+        col++;
+      }
+      blocks.push({ monthFmt: label, mediaCol: cols[cols.length - 1], weekCols: cols.slice(0, -1) });
+    }
+
+    const data = {}; // data[storeKey][monthFmt] = { desperdicio:{weeks,media}, balanca:{weeks,media} }
+
+    for (let r = 2; r < rows.length; r++) {
+      const row = rows[r];
+      const lojaRaw = (row[0] || '').trim();
+      const tipoRaw = (row[1] || '').trim();
+      if (!lojaRaw || !tipoRaw) continue;
+
+      const match = DESP_STORE_PREFIXES.find(s => lojaRaw.toUpperCase().startsWith(s.prefix));
+      if (!match) continue;
+
+      const isDesperdicio = tipoRaw.toLowerCase().includes('desperdício') || tipoRaw.toLowerCase().includes('desperdicio');
+      const isBalanca = tipoRaw.toLowerCase().includes('balança') || tipoRaw.toLowerCase().includes('balanca');
+      if (!isDesperdicio && !isBalanca) continue;
+
+      if (!data[match.key]) data[match.key] = {};
+
+      blocks.forEach(block => {
+        if (!data[match.key][block.monthFmt]) {
+          data[match.key][block.monthFmt] = { desperdicio: null, balanca: null };
+        }
+        const weeks = block.weekCols
+          .map(c => ({ d: (dateRow[c] || '').slice(0, 5), v: parsePercent(row[c]) }))
+          .filter(w => w.v !== null);
+        const media = parsePercent(row[block.mediaCol]);
+        const entry = { weeks, media };
+        if (isDesperdicio) data[match.key][block.monthFmt].desperdicio = entry;
+        if (isBalanca) data[match.key][block.monthFmt].balanca = entry;
+      });
+    }
+
+    window.__despBalData = data;
+    console.log('[Desp/Bal] Loaded', Object.keys(data).length, 'stores');
+  } catch (e) {
+    console.warn('[Desp/Bal] Failed to load:', e);
+  }
+}
+
+// Desperdício Bebida Láctea — quanto menor, melhor.
+function classifyDesperdicio(pct) {
+  if (pct === null || pct === undefined) return null;
+  if (pct <= 5)  return { label: 'OURO',           cls: 'desp-ouro'   };
+  if (pct <= 10) return { label: 'PRATA',          cls: 'desp-prata'  };
+  if (pct <= 15) return { label: 'BRONZE',         cls: 'desp-bronze' };
+  return              { label: 'SEM PREMIAÇÃO',  cls: 'desp-none'   };
+}
+
+// Pesagem Balança — quanto maior, melhor.
+function classifyBalanca(pct) {
+  if (pct === null || pct === undefined) return null;
+  if (pct < 50)  return { label: 'CRÍTICO',    cls: 'bal-critico'   };
+  if (pct <= 80) return { label: 'ACEITÁVEL',  cls: 'bal-aceitavel' };
+  return              { label: 'IDEAL',      cls: 'bal-ideal'     };
 }
 
 // Retorna as datas (DD/MM) da janela D-1..D-7 sem dados no Historico Vendas
