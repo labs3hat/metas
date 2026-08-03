@@ -1786,17 +1786,29 @@ function renderQualityCats(storeKey) {
 
   cards.forEach(card => {
     const entry = card.entry;
-    const media = entry ? entry.media : null;
-    const badge = card.classify(media);
     const weeks = entry ? entry.weeks : [];
+    const media = entry ? entry.media : null;
+    // Semanas já vêm em ordem cronológica (colunas da planilha, esquerda→direita).
+    const ultimaSemana = weeks.length > 0 ? weeks[weeks.length - 1] : null;
+    const hasAnyData = weeks.length > 0 || media !== null;
+
+    // Classificação: usa a média do mês (métrica oficial de premiação).
+    // Se ainda não houver média calculada mas já existir ao menos uma semana
+    // lançada, usa a última semana como estimativa provisória.
+    const badgeSource = media !== null ? media : (ultimaSemana ? ultimaSemana.v : null);
+    const badgeIsEstimate = media === null && ultimaSemana !== null;
+    const badge = card.classify(badgeSource);
 
     const weeksHTML = weeks.length > 0 ? (() => {
-      const bars = weeks.map(w => `
+      const bars = weeks.map((w, i) => {
+        const isLast = i === weeks.length - 1;
+        return `
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;">
           <div style="font-size:9px;font-weight:700;color:var(--text);">${w.v.toFixed(0)}%</div>
-          <div style="height:${Math.max(3, Math.min(40, Math.abs(w.v) * 1.2))}px;width:100%;border-radius:2px 2px 0 0;background:#378ADD;"></div>
+          <div style="height:${Math.max(3, Math.min(40, Math.abs(w.v) * 1.2))}px;width:100%;border-radius:2px 2px 0 0;background:${isLast ? '#1E5FA8' : '#378ADD'};"></div>
           <div style="font-size:9px;color:var(--muted);">${w.d}</div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
       return `<div style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px;">
         <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Semanas do mês</div>
         <div style="display:flex;gap:3px;align-items:flex-end;">${bars}</div>
@@ -1810,12 +1822,19 @@ function renderQualityCats(storeKey) {
         <span class="tc-emoji">${card.emoji}</span>
         <span class="tc-label">${card.label}</span>
       </div>
-      ${media !== null ? `
-        <div class="tc-numbers">
-          <span class="tc-realized" style="color:var(--text);">${media.toFixed(2)}%</span>
-          <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">média do mês</span>
+      ${hasAnyData ? `
+        <div style="display:flex;gap:22px;align-items:baseline;flex-wrap:wrap;">
+          ${ultimaSemana ? `
+          <div>
+            <span class="tc-realized" style="color:var(--text);">${ultimaSemana.v.toFixed(0)}%</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">última semana</span>
+          </div>` : ''}
+          <div>
+            <span class="tc-realized" style="color:var(--text);">${media !== null ? media.toFixed(2) + '%' : '—'}</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">média do mês</span>
+          </div>
         </div>
-        ${badge ? `<div class="tc-status ${badge.cls}">${badge.label}</div>` : ''}
+        ${badge ? `<div class="tc-status ${badge.cls}">${badge.label}${badgeIsEstimate ? ' <span style="font-weight:600;opacity:.75;">(estimativa · última semana)</span>' : ''}</div>` : ''}
       ` : `
         <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--muted);font-weight:700;margin-top:6px;">
           Sem dados lançados para este mês
