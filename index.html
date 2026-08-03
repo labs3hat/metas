@@ -1792,12 +1792,16 @@ function renderQualityCats(storeKey) {
     const ultimaSemana = weeks.length > 0 ? weeks[weeks.length - 1] : null;
     const hasAnyData = weeks.length > 0 || media !== null;
 
-    // Classificação: usa a média do mês (métrica oficial de premiação).
-    // Se ainda não houver média calculada mas já existir ao menos uma semana
-    // lançada, usa a última semana como estimativa provisória.
-    const badgeSource = media !== null ? media : (ultimaSemana ? ultimaSemana.v : null);
-    const badgeIsEstimate = media === null && ultimaSemana !== null;
-    const badge = card.classify(badgeSource);
+    // Classificação: cada número é classificado de forma independente, para
+    // que a cor do texto reflita a faixa daquele valor específico.
+    const badgeSemana = ultimaSemana ? card.classify(ultimaSemana.v) : null;
+    const badgeMedia  = media !== null ? card.classify(media) : null;
+
+    // Selo de destaque (pill abaixo da média): usa a média oficial quando
+    // existe; se ainda não houver média mas já existir semana, usa a semana
+    // como estimativa provisória.
+    const badge = badgeMedia || badgeSemana;
+    const badgeIsEstimate = badgeMedia === null && badgeSemana !== null;
 
     const weeksHTML = weeks.length > 0 ? (() => {
       const bars = weeks.map((w, i) => {
@@ -1826,12 +1830,12 @@ function renderQualityCats(storeKey) {
         <div style="display:flex;justify-content:${ultimaSemana ? 'space-between' : 'flex-end'};align-items:flex-start;gap:16px;flex-wrap:wrap;">
           ${ultimaSemana ? `
           <div>
-            <span class="tc-realized" style="color:var(--text);">${ultimaSemana.v.toFixed(0)}%</span>
+            <span class="tc-realized" style="color:${classColor(badgeSemana)};">${ultimaSemana.v.toFixed(0)}%</span>
             <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">última semana</span>
           </div>` : ''}
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
             <div>
-              <span class="tc-realized" style="color:var(--text);">${media !== null ? media.toFixed(2) + '%' : '—'}</span>
+              <span class="tc-realized" style="color:${classColor(badgeMedia)};">${media !== null ? media.toFixed(2) + '%' : '—'}</span>
               <span style="font-size:11px;color:var(--muted);font-weight:700;margin-left:2px;">média do mês</span>
             </div>
             ${badge ? `<div class="tc-status ${badge.cls}" style="margin-top:0;">${badge.label}${badgeIsEstimate ? ' <span style="font-weight:600;opacity:.75;">(estimativa · última semana)</span>' : ''}</div>` : ''}
@@ -2543,6 +2547,22 @@ function classifyBalanca(pct) {
   if (pct < 50)  return { label: 'CRÍTICO',    cls: 'bal-critico'   };
   if (pct <= 80) return { label: 'ACEITÁVEL',  cls: 'bal-aceitavel' };
   return              { label: 'IDEAL',      cls: 'bal-ideal'     };
+}
+
+// Cor sólida (legível sobre fundo branco) por classificação — usada para
+// destacar o próprio número de "última semana" / "média do mês" com a
+// cor da faixa em que ele se enquadra.
+const CLASS_COLORS = {
+  'desp-ouro':     '#B8860B',
+  'desp-prata':    '#6B7280',
+  'desp-bronze':   '#A0522D',
+  'desp-none':     'var(--red)',
+  'bal-critico':   'var(--red)',
+  'bal-aceitavel': '#E65100',
+  'bal-ideal':     'var(--green)',
+};
+function classColor(badge) {
+  return badge ? (CLASS_COLORS[badge.cls] || 'var(--text)') : 'var(--text)';
 }
 
 // Retorna as datas (DD/MM) da janela D-1..D-7 sem dados no Historico Vendas
