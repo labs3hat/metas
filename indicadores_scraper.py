@@ -33,6 +33,7 @@ Delta entre meses: 36 linhas. Coluna C = dia 1.
 """
 
 import os
+import io
 import re
 import time
 import json
@@ -43,9 +44,92 @@ from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 
 import xlrd
+import openpyxl
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 import gspread
 from google.oauth2.service_account import Credentials
+
+# ── LEITURA DE EXCEL (formato real detectado por assinatura de bytes) ────────
+# A partir da versão 1.026.027 do BIP360, alguns relatórios passaram a ser
+# exportados como XLSX real (OOXML/ZIP) mantendo o nome/extensão .xls
+# histórico. Isso quebra o xlrd, que só lê o formato binário legado
+# BIFF/OLE2 e lança "Excel xlsx file; not supported" ao encontrar um ZIP.
+# A extensão do arquivo NÃO é confiável — detectamos o formato pelos
+# primeiros bytes (assinatura) e escolhemos a biblioteca correta.
+XLSX_MAGIC = b"PK\x03\x04"                          # OOXML / ZIP
+XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"       # OLE2 / BIFF legado
+
+
+def _detect_excel_format(file_path: str) -> str:
+    """Identifica o formato real do arquivo Excel pelos bytes.
+
+    Retorna "xlsx" ou "xls". Lança ValueError com a assinatura encontrada
+    se o arquivo não corresponder a nenhum dos dois formatos conhecidos —
+    nunca assume um formato por padrão (erro silencioso é bug).
+    """
+    with open(file_path, "rb") as f:
+        header = f.read(8)
+
+    if header.startswith(XLSX_MAGIC):
+        return "xlsx"
+    if header.startswith(XLS_MAGIC):
+        return "xls"
+
+    raise ValueError(
+        f"Formato de arquivo Excel não reconhecido em '{file_path}': "
+        f"assinatura de bytes {header!r} não corresponde a XLSX (ZIP) "
+        f"nem a XLS legado (OLE2). Arquivo pode estar corrompido, vazio "
+        f"ou ser uma página de erro/HTML salva com extensão .xls."
+    )
+
+
+class _OpenpyxlSheetAdapter:
+    """Expõe uma planilha do openpyxl com a mesma interface mínima do xlrd
+    já usada neste script (.name, .nrows, .ncols, .cell_value(r, c)), para
+    que as funções de parsing não precisem ser reescritas por formato."""
+
+    def __init__(self, ws):
+        self._ws = ws
+        self.name = ws.title
+        self.nrows = ws.max_row or 0
+        self.ncols = ws.max_column or 0
+
+    def cell_value(self, r: int, c: int):
+        value = self._ws.cell(row=r + 1, column=c + 1).value
+        return "" if value is None else value
+
+
+class _OpenpyxlWorkbookAdapter:
+    def __init__(self, file_path: str):
+        # openpyxl.load_workbook decide o formato pela EXTENSÃO do nome do
+        # arquivo quando recebe um caminho (string) — e rejeita qualquer
+        # ".xls" mesmo que o conteúdo seja XLSX real (ver
+        # openpyxl.reader.excel._validate_archive). Como é exatamente esse
+        # o cenário do BIP360, lemos os bytes e passamos um BytesIO: nesse
+        # caso openpyxl pula a checagem de extensão e lê o ZIP direto do
+        # conteúdo. BytesIO (não um file handle aberto) evita depender do
+        # arquivo permanecer aberto durante a leitura lazy do read_only.
+        with open(file_path, "rb") as f:
+            buffer = io.BytesIO(f.read())
+        self._wb = openpyxl.load_workbook(buffer, data_only=True, read_only=True)
+
+    def sheets(self):
+        return [_OpenpyxlSheetAdapter(ws) for ws in self._wb.worksheets]
+
+
+def open_workbook_smart(file_path: str):
+    """Abre um arquivo Excel exportado pelo BIP360, escolhendo xlrd ou
+    openpyxl a partir do formato real (detectado por bytes, não extensão).
+
+    Retorna um objeto com o mesmo contrato usado neste script em todos os
+    pontos de parsing: wb.sheets()[0] -> objeto com .name, .nrows, .ncols
+    e .cell_value(r, c).
+    """
+    fmt = _detect_excel_format(file_path)
+    if fmt == "xlsx":
+        return _OpenpyxlWorkbookAdapter(file_path)
+    return xlrd.open_workbook(file_path)
+
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -609,7 +693,7 @@ def parse_tm_xls(file_path: str) -> dict:
 
     A ordem real é localizada pelo cabeçalho para resistir a mudanças futuras.
     """
-    wb = xlrd.open_workbook(file_path)
+    wb = open_workbook_smart(file_path)
     ws = wb.sheets()[0]
 
     # Localizar linha de cabeçalho e colunas
