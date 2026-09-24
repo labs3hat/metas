@@ -31,6 +31,9 @@ jobs:
           BIP_USER: ${{ secrets.BIP_USER }}
           BIP_PASS: ${{ secrets.BIP_PASS }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # Escrita dupla no banco do sistema novo (banco_coleta.py). Sem o
+          # secret, fica vazio e o scraper grava só na planilha.
+          COLETA_TOKEN: ${{ secrets.COLETA_TOKEN }}
           DEBUG_DIR: debug
         run: python indicadores_scraper.py
 

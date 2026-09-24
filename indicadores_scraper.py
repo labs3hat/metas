@@ -49,6 +49,8 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 import gspread
 from google.oauth2.service_account import Credentials
 
+from banco_coleta import ClienteColeta, chave_no_banco
+
 # ── LEITURA DE EXCEL (formato real detectado por assinatura de bytes) ────────
 # A partir da versão 1.026.027 do BIP360, alguns relatórios passaram a ser
 # exportados como XLSX real (OOXML/ZIP) mantendo o nome/extensão .xls
@@ -993,18 +995,42 @@ def write_all_metrics(all_metrics: list[StoreMetrics], ws_cache: dict) -> int:
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     window = build_dates_window(BACKFILL_DAYS)
+    iniciado_em = br_now().isoformat()
     log.info(
         "=== BIP360 Indicadores Scraper — janela %s..%s (%d dias) ===",
         window[-1]["label"], window[0]["label"], BACKFILL_DAYS,
     )
+    cliente = ClienteColeta.do_ambiente()
 
     # 1. Lê a planilha e detecta o que falta (idempotente / auto-corretivo)
     ws_cache: dict[int, gspread.Worksheet] = {}
     missing = read_missing_combos(window, ws_cache)
 
+    # Escrita dupla (banco_coleta.py): o que já está na planilha mas falta no
+    # banco também é coletado — só para o banco, limitado por loja para não
+    # estourar o tempo do workflow. Sem COLETA_TOKEN, nada muda.
+    somente_banco: set[tuple[str, str]] = set()
+    presentes = cliente.dias_presentes("indicadores", [d["label"] for d in window]) if cliente else None
+    if cliente is not None and presentes is not None:
+        for store in LOJAS:
+            ja_pendentes = {d["label"] for d in missing.get(store["key"], [])}
+            extras = [
+                d for d in window
+                if d["label"] not in ja_pendentes
+                and (chave_no_banco(store["key"]), d["label"]) not in presentes
+            ][: cliente.backfill_max_por_loja]
+            if extras:
+                missing.setdefault(store["key"], []).extend(extras)
+                somente_banco.update((store["key"], d["label"]) for d in extras)
+        if somente_banco:
+            log.info("Dias que faltam só no banco (recoleta limitada): %d", len(somente_banco))
+
     total_pend = sum(len(v) for v in missing.values())
     if total_pend == 0:
         log.info("Planilha completa nos últimos %d dias. Nada a coletar.", BACKFILL_DAYS)
+        if cliente is not None:
+            cliente.registrar_execucao("indicadores", iniciado_em, "sucesso", len(LOJAS), 0, [],
+                                       "nada a coletar")
         return
 
     for key, dlist in missing.items():
@@ -1071,11 +1097,22 @@ def main():
 
             browser.close()
 
-    # 3. Escrita em lote (1 chamada de API por aba de ano)
+    # 3. Escrita em lote (1 chamada de API por aba de ano). Dia coletado só
+    #    para o banco não é regravado na planilha, que já o tinha.
     log.info("\n--- Escrevendo no Google Sheets ---")
     sheet_errors = 0
-    if all_metrics:
-        sheet_errors = write_all_metrics(all_metrics, ws_cache)
+    para_planilha = [
+        m for m in all_metrics if (m.store_key, m.date["label"]) not in somente_banco
+    ]
+    if para_planilha:
+        sheet_errors = write_all_metrics(para_planilha, ws_cache)
+
+    # 3b. Escrita dupla no banco — falha aqui só vira aviso no log.
+    if cliente is not None:
+        for m in all_metrics:
+            cliente.enviar_indicadores(
+                m.store_key, m.date["label"], m.receita, m.ticket_medio, m.pessoas
+            )
 
     # 4. Resumo e exit code — pendência restante = falha do workflow,
     #    para que o watchdog dispare o reprocessamento automático.
@@ -1084,9 +1121,27 @@ def main():
         len(all_metrics), len(unresolved), sheet_errors,
     )
 
+    # Dia que faltava só no banco e falhou não é pendência da planilha: vira
+    # aviso e não deixa o workflow vermelho (o banco nunca atrapalha a planilha).
+    so_do_banco = [u for u in unresolved if (u[0], u[1]) in somente_banco]
+    unresolved = [u for u in unresolved if (u[0], u[1]) not in somente_banco]
+    for key, label, motivo in so_do_banco:
+        log.warning("  [banco] não recoletado: %s %s (%s) — tenta de novo amanhã", key, label, motivo)
+
     if unresolved:
         for key, label, motivo in unresolved:
             log.error("  PENDENTE: %s %s (%s)", key, label, motivo)
+
+    if cliente is not None:
+        lojas_com_pendencia = {key for key, _, _ in unresolved}
+        status = "sucesso" if not (unresolved or sheet_errors) else (
+            "parcial" if len(lojas_com_pendencia) < len(LOJAS) else "falha")
+        cliente.registrar_execucao(
+            "indicadores", iniciado_em, status,
+            len(LOJAS) - len(lojas_com_pendencia), len(lojas_com_pendencia),
+            [{"loja": key, "data": label, "motivo": motivo} for key, label, motivo in unresolved],
+            f"coletadas={len(all_metrics)} erros_planilha={sheet_errors}",
+        )
 
     if unresolved or sheet_errors:
         raise RuntimeError(

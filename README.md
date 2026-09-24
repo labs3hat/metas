@@ -52,3 +52,15 @@ ID: `1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY`
 | MGA 5 | Loja Shopping Cidade — Maringá |
 | MGA 7 | Quiosque Avenida Center — Maringá |
 | MGA 8 | Quiosque Havan — Maringá |
+
+## Escrita dupla no banco do sistema novo (desde 24/09/2026)
+
+Os dois scrapers continuam gravando na planilha exatamente como antes e, depois,
+mandam o mesmo dado para o banco do sistema novo (`banco_coleta.py` →
+função `ingerir-coleta` do Supabase, repositório `labs3hat/metas-41944e89`).
+
+- Liga com o secret `COLETA_TOKEN` do repositório. Sem ele, nada muda.
+- Falha no banco **nunca** derruba a planilha: vira aviso no log.
+- Idempotente: reenviar um dia substitui o dia no banco.
+- Dia que está na planilha mas falta no banco é recoletado só para o banco,
+  no máximo 2 por loja por execução (`COLETA_BACKFILL_MAX_POR_LOJA`).

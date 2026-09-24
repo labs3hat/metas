@@ -20,6 +20,9 @@ import xlrd
 import openpyxl
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 import gspread
+import logging
+
+from banco_coleta import ClienteColeta, chave_no_banco
 from google.oauth2.service_account import Credentials
 
 # ── LEITURA DE EXCEL (formato real detectado por assinatura de bytes) ────────
@@ -1913,7 +1916,8 @@ def parse_xls(file_path: str) -> dict:
 
 # ── PROCESSAMENTO DE UMA LOJA ─────────────────────────────────────────────────
 def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
-                  hist_days, hist_data_rows, existing_hist_dates):
+                  hist_days, hist_data_rows, existing_hist_dates,
+                  cliente=None, presentes_banco=None):
     """
     Processa uma loja já com browser/página abertos:
       1. login + seleção de loja
@@ -1941,11 +1945,23 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
     update_operadores(ws_op, store["key"], operators)
 
     # ── Histórico diário: coleta só as datas ainda ausentes ──
+    # Escrita dupla (banco_coleta.py): um dia que já está na planilha mas
+    # falta no banco também é baixado — só para o banco, limitado por loja
+    # para não estourar o tempo do workflow. Sem COLETA_TOKEN, nada muda.
     hist_pending = 0
+    backfill_banco = cliente.backfill_max_por_loja if cliente else 0
     for hist_date in hist_days:
-        if (store["key"], hist_date) in existing_hist_dates:
+        ja_na_planilha = (store["key"], hist_date) in existing_hist_dates
+        falta_no_banco = (
+            presentes_banco is not None
+            and (chave_no_banco(store["key"]), hist_date) not in presentes_banco
+        )
+        if ja_na_planilha and not (falta_no_banco and backfill_banco > 0):
             print(f"  ↷ {store['key']} {hist_date} já existe")
             continue
+        if ja_na_planilha:
+            backfill_banco -= 1
+            print(f"  ↻ {store['key']} {hist_date} já está na planilha; falta no banco")
         hd, hm, hy = hist_date.split("/")
         day_start = f"{hd}/{hm}/{hy} 00:00:00"
         day_end   = f"{hd}/{hm}/{hy} 23:59:59"
@@ -1960,16 +1976,26 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                     cat: sum(op.get(cat, 0) for op in hist_ops.values())
                     for cat in ["shake", "chantilly", "agua", "milk", "canecake"]
                 }
-                add_hist_row(hist_data_rows, existing_hist_dates,
-                             store["key"], hist_date, hist_totals)
+                if not ja_na_planilha:
+                    add_hist_row(hist_data_rows, existing_hist_dates,
+                                 store["key"], hist_date, hist_totals)
             else:
                 # Sem vendas nesse dia — grava zeros para não retentar
-                add_hist_row(hist_data_rows, existing_hist_dates,
-                             store["key"], hist_date,
-                             {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0})
+                hist_ops = {}
+                if not ja_na_planilha:
+                    add_hist_row(hist_data_rows, existing_hist_dates,
+                                 store["key"], hist_date,
+                                 {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0})
+            if cliente is not None:
+                cliente.enviar_vendas(store["key"], hist_date, hist_ops)
         except Exception as he:
-            hist_pending += 1
-            print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
+            if ja_na_planilha:
+                # Dia buscado só para o banco: a planilha já está completa, então
+                # não é pendência e não deixa o workflow vermelho.
+                print(f"  ⚠️ [banco] {hist_date} não recoletado: {he} — tenta de novo amanhã")
+            else:
+                hist_pending += 1
+                print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
 
     # ── Ticket Médio mensal ──
     tm_file_path = download_tm_xls(page, store, tmpdir)
@@ -1982,7 +2008,13 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    iniciado_em = br_now().isoformat()
     print(f"=== BIP360 Scraper — {br_now().strftime('%d/%m/%Y %H:%M')} BRT ===")
+    cliente = ClienteColeta.do_ambiente()
 
     ws_gsheet = get_sheet()
     ws_tm = get_sheet_tm()
@@ -2002,6 +2034,7 @@ def main():
     now_brt = br_now()
     hist_days = [(now_brt - timedelta(days=i)).strftime("%d/%m/%Y") for i in range(1, 8)]
     print(f"Dias a verificar: {hist_days}")
+    presentes_banco = cliente.dias_presentes("vendas", hist_days) if cliente else None
 
     ok_stores = []
     failed_stores = []          # lojas cujo essencial falhou mesmo após retry
@@ -2034,6 +2067,7 @@ def main():
                         hist_pending = process_store(
                             page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                             hist_days, hist_data_rows, existing_hist_dates,
+                            cliente, presentes_banco,
                         )
                         hist_pending_total += hist_pending
                         ok_stores.append(store["key"])
@@ -2075,6 +2109,15 @@ def main():
           f"| Dias de histórico pendentes: {hist_pending_total} ===")
     for key, err in failed_stores:
         print(f"  ✗ LOJA PENDENTE: {key} ({err})")
+
+    if cliente is not None:
+        status = "sucesso" if not (failed_stores or save_error or hist_pending_total) else (
+            "parcial" if ok_stores else "falha")
+        cliente.registrar_execucao(
+            "metas", iniciado_em, status, len(ok_stores), len(failed_stores),
+            [{"loja": key, "motivo": str(err)[:200]} for key, err in failed_stores],
+            f"histórico pendente: {hist_pending_total}; erro ao salvar: {save_error or 'nenhum'}",
+        )
 
     # Exit code: qualquer loja essencial falha, histórico pendente ou erro de
     # escrita deixa o workflow vermelho para o watchdog reprocessar.
