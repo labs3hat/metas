@@ -1373,6 +1373,142 @@ def download_xls_daterange(page, store: dict, download_dir: str, day_start: str,
     return file_path
 
 
+# ── Atendimentos por operador (índice "Pessoas Atendidas") ────────────────────
+# Base do % de uso do Totem no sistema novo (gatilho da supermeta a partir de
+# out/2026). Só vai para o banco: a planilha não muda. É o MESMO relatório do
+# ranking, trocando o seletor "Índice" (docs/bip360-integration-guide.md 9.1):
+#   - trocar o Índice NÃO refaz a busca: é obrigatório clicar em Pesquisar;
+#   - sem isso o export sai com o cabeçalho novo e valores vazios — por isso o
+#     parser recusa coluna de pessoas vazia em vez de gravar zero.
+
+ROTULO_INDICE_PESSOAS = "Pessoas Atendidas"
+
+
+def selecionar_indice(page, rotulo: str) -> None:
+    """Escolhe o item do seletor "Índice" (PrimeFaces selectOneMenu) cujo texto
+    contém `rotulo`. Levanta exceção se não achar ou se a escolha não pegar."""
+    alvo = page.evaluate(
+        r"""(rotulo) => {
+            const norm = (t) => (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+            for (const sel of document.querySelectorAll('select')) {
+                const opt = Array.from(sel.options).find(o => norm(o.text).includes(norm(rotulo)));
+                if (opt) return {id: sel.id, value: opt.value, text: opt.text.trim()};
+            }
+            return null;
+        }""",
+        rotulo,
+    )
+    if not alvo:
+        raise Exception(f'Seletor "Índice" com a opção "{rotulo}" não encontrado na tela.')
+
+    container = alvo["id"][:-len("_input")] if alvo["id"].endswith("_input") else alvo["id"]
+    escolhido = False
+    try:
+        page.locator(f'[id="{container}"]').click(timeout=10000)
+        page.locator(f'[id="{container}_panel"] li[data-label="{alvo["text"]}"]').click(timeout=10000)
+        escolhido = True
+    except Exception as e:
+        print(f"  ⚠️ Índice pelo menu falhou ({e}); tentando pelo select oculto")
+    if not escolhido:
+        page.select_option(f'[id="{alvo["id"]}"]', alvo["value"])
+        page.evaluate(
+            """(id) => {
+                const el = document.getElementById(id);
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+            }""",
+            alvo["id"],
+        )
+    wait_bip_idle(page, timeout=30)
+
+    atual = page.evaluate(
+        """(id) => {
+            const el = document.getElementById(id);
+            return el && el.selectedIndex >= 0 ? el.options[el.selectedIndex].text.trim() : null;
+        }""",
+        alvo["id"],
+    )
+    if atual != alvo["text"]:
+        raise Exception(f'Índice não mudou: esperado "{alvo["text"]}", está "{atual}".')
+    print(f"  Índice: {atual}")
+
+
+def download_atendimentos_dia(page, store: dict, download_dir: str, day_start: str,
+                              day_end: str, suffix: str = "") -> str | None:
+    """Exporta o ranking de UM dia com o índice Pessoas Atendidas. None = sem venda."""
+    go_to_report(page)
+    set_report_dates(page, day_start, day_end)
+    selecionar_indice(page, ROTULO_INDICE_PESSOAS)
+    time.sleep(0.5)
+    click_pesquisar(page)  # obrigatório depois de trocar o Índice
+    wait_bip_idle(page, timeout=45)
+
+    state = page.evaluate("""() => {
+        const body = document.body.innerText || '';
+        const hasXls = !!document.querySelector('img[src*="xls" i]');
+        const hasNoRecords = body.toLowerCase().includes('nenhum registro');
+        return {hasXls, hasNoRecords};
+    }""")
+    if state.get("hasNoRecords") and not state.get("hasXls"):
+        return None
+
+    download = click_xls_export(page)
+    file_path = os.path.join(download_dir, f"{store['key']}{suffix}_atendimentos.xls")
+    download.save_as(file_path)
+    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+        raise Exception(f"XLS de atendimentos vazio: {file_path}")
+    return file_path
+
+
+def parse_atendimentos_xls(file_path: str) -> dict[str, int]:
+    """Operador → pessoas atendidas. Recusa (exceção) arquivo sem a coluna de
+    pessoas ou com ela vazia: é o sintoma de exportar sem clicar em Pesquisar."""
+    wb = open_workbook_smart(file_path)
+    ws = wb.sheets()[0]
+
+    header_row = col_op = col_pessoas = None
+    for r in range(min(12, ws.nrows)):
+        vals = [normalize(str(ws.cell_value(r, c))).strip() for c in range(ws.ncols)]
+        for c, val in enumerate(vals):
+            if val == "operador":
+                col_op = c
+            if "pessoas" in val:
+                col_pessoas = c
+        if col_op is not None and col_pessoas is not None:
+            header_row = r
+            break
+        col_op = col_pessoas = None
+    if header_row is None:
+        raise Exception(f"Cabeçalho Operador/Pessoas não encontrado em {file_path}.")
+
+    resultado: dict[str, int] = {}
+    vazias = 0
+    for r in range(header_row + 1, ws.nrows):
+        nome_bruto = str(ws.cell_value(r, col_op)).strip()
+        # Linha de totais ("Total" ou "Totais") não é operador.
+        if not nome_bruto or re.match(r"^tota(l|is)\b", normalize(nome_bruto).strip()):
+            continue
+        bruto = ws.cell_value(r, col_pessoas)
+        if bruto in ("", None):
+            vazias += 1
+            continue
+        if isinstance(bruto, (int, float)):
+            pessoas = float(bruto)
+        else:
+            texto = re.sub(r"[^0-9,.-]", "", str(bruto)).replace(".", "").replace(",", ".")
+            pessoas = float(texto or "nan")
+        if pessoas != pessoas or pessoas < 0 or pessoas != int(pessoas):
+            raise Exception(f'Pessoas inválido para "{nome_bruto}": {bruto!r} em {file_path}.')
+        nome = normalize_operator_name(nome_bruto)
+        resultado[nome] = resultado.get(nome, 0) + int(pessoas)
+
+    if vazias and not resultado:
+        raise Exception(
+            f"Coluna de pessoas vazia em {vazias} linha(s) de {file_path} — "
+            "export sem Pesquisar depois de trocar o Índice?"
+        )
+    return resultado
+
+
 def go_to_tm_report(page):
     """Open Ticket Médio Diário report."""
     print("  Opening Ticket Médio Diário report...")
@@ -1917,12 +2053,13 @@ def parse_xls(file_path: str) -> dict:
 # ── PROCESSAMENTO DE UMA LOJA ─────────────────────────────────────────────────
 def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                   hist_days, hist_data_rows, existing_hist_dates,
-                  cliente=None, presentes_banco=None):
+                  cliente=None, presentes_banco=None, presentes_atendimentos=None):
     """
     Processa uma loja já com browser/página abertos:
       1. login + seleção de loja
       2. metas do mês (realizado) + operadores
       3. histórico diário D-1..D-7 (idempotente: pula datas já gravadas)
+      3b. atendimentos por operador dos dias que faltam no banco (só banco)
       4. ticket médio mensal
 
     Levanta exceção se o essencial (login/seleção/metas do mês) falhar,
@@ -1997,6 +2134,29 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                 hist_pending += 1
                 print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
 
+    # ── Atendimentos por operador (só banco; % de uso do Totem) ──
+    # Nunca derruba a loja nem a planilha: falha vira aviso e o dia fica para
+    # a próxima execução (o banco diz o que já tem).
+    if cliente is not None and presentes_atendimentos is not None:
+        limite = 1 + cliente.backfill_max_por_loja
+        for hist_date in hist_days:
+            if (chave_no_banco(store["key"]), hist_date) in presentes_atendimentos:
+                continue
+            if limite <= 0:
+                break
+            limite -= 1
+            hd, hm, hy = hist_date.split("/")
+            try:
+                arq = download_atendimentos_dia(
+                    page, store, tmpdir, f"{hd}/{hm}/{hy} 00:00:00", f"{hd}/{hm}/{hy} 23:59:59",
+                    suffix=f"_{hd}{hm}",
+                )
+                atendimentos = parse_atendimentos_xls(arq) if arq else {}
+                cliente.enviar_atendimentos(store["key"], hist_date, atendimentos)
+            except Exception as ae:
+                print(f"  ⚠️ [banco] atendimentos {store['key']} {hist_date} não coletados: {ae}")
+                save_debug(page, f"atendimentos_{store['key']}_{hd}{hm}")
+
     # ── Ticket Médio mensal ──
     tm_file_path = download_tm_xls(page, store, tmpdir)
     tm_value = parse_ticket_medio_xls(tm_file_path)
@@ -2035,6 +2195,7 @@ def main():
     hist_days = [(now_brt - timedelta(days=i)).strftime("%d/%m/%Y") for i in range(1, 8)]
     print(f"Dias a verificar: {hist_days}")
     presentes_banco = cliente.dias_presentes("vendas", hist_days) if cliente else None
+    presentes_atendimentos = cliente.dias_presentes("atendimentos", hist_days) if cliente else None
 
     ok_stores = []
     failed_stores = []          # lojas cujo essencial falhou mesmo após retry
@@ -2067,7 +2228,7 @@ def main():
                         hist_pending = process_store(
                             page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                             hist_days, hist_data_rows, existing_hist_dates,
-                            cliente, presentes_banco,
+                            cliente, presentes_banco, presentes_atendimentos,
                         )
                         hist_pending_total += hist_pending
                         ok_stores.append(store["key"])

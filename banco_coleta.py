@@ -148,6 +148,24 @@ class ClienteColeta:
             log.info("  [banco] indicadores %s %s gravados", loja, data_br)
         return resposta is not None
 
+    def enviar_atendimentos(self, loja: str, data_br: str, atendimentos: dict[str, int]) -> bool:
+        """Clientes atendidos por operador em UM dia de UMA loja (relatório de
+        ranking, índice Pessoas Atendidas). Base do % de uso do Totem. Dia sem
+        venda: atendimentos={}."""
+        resposta = self._enviar({
+            "acao": "atendimentos",
+            "loja": chave_no_banco(loja),
+            "data": data_iso(data_br),
+            "operadores": [
+                {"nome": nome, "pessoas": int(pessoas)} for nome, pessoas in atendimentos.items()
+            ],
+        })
+        if resposta is not None:
+            total = sum(atendimentos.values())
+            log.info("  [banco] atendimentos %s %s: %d operador(es), %d cliente(s)",
+                     loja, data_br, len(atendimentos), total)
+        return resposta is not None
+
     def dias_presentes(self, tipo: str, datas_br: list[str]) -> set[tuple[str, str]] | None:
         """(loja NA CHAVE DO BANCO, 'DD/MM/AAAA') já gravados no banco — compare
         com chave_no_banco(sua_chave). None se não deu para perguntar: aí
