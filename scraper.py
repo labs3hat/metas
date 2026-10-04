@@ -1400,7 +1400,41 @@ def selecionar_indice(page, rotulo: str) -> None:
     )
     if not alvo:
         raise Exception(f'Seletor "Índice" com a opção "{rotulo}" não encontrado na tela.')
+    _escolher_opcao(page, alvo)
 
+
+def selecionar_no_campo(page, campo: str, opcao: str) -> None:
+    """Escolhe `opcao` no seletor (PrimeFaces selectOneMenu) do campo cujo
+    rótulo é `campo` — "Tipo Venda", "Variável"... Pelo rótulo, e não pela
+    primeira lista que tiver a opção: "Totem" pode existir em outras listas."""
+    alvo = page.evaluate(
+        r"""([campo, opcao]) => {
+            const norm = (t) => (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+            const rotulos = Array.from(document.querySelectorAll('label, span, div'))
+                .filter(el => el.children.length === 0 && norm(el.innerText).replace(/\s*\*$/, '') === norm(campo));
+            for (const rot of rotulos) {
+                let caixa = rot.parentElement;
+                for (let i = 0; i < 4 && caixa; i++, caixa = caixa.parentElement) {
+                    const sel = caixa.querySelector('select');
+                    if (!sel) continue;
+                    const opt = Array.from(sel.options).find(o => norm(o.text) === norm(opcao))
+                             || Array.from(sel.options).find(o => norm(o.text).includes(norm(opcao)));
+                    if (opt) return {id: sel.id, value: opt.value, text: opt.text.trim()};
+                    break;
+                }
+            }
+            return null;
+        }""",
+        [campo, opcao],
+    )
+    if not alvo:
+        raise Exception(f'Campo "{campo}" com a opção "{opcao}" não encontrado na tela.')
+    _escolher_opcao(page, alvo)
+
+
+def _escolher_opcao(page, alvo: dict) -> None:
+    """Abre o selectOneMenu e clica no item; se não der, troca o select oculto.
+    Confere que a escolha pegou."""
     container = alvo["id"][:-len("_input")] if alvo["id"].endswith("_input") else alvo["id"]
     escolhido = False
     try:
@@ -1428,8 +1462,100 @@ def selecionar_indice(page, rotulo: str) -> None:
         alvo["id"],
     )
     if atual != alvo["text"]:
-        raise Exception(f'Índice não mudou: esperado "{alvo["text"]}", está "{atual}".')
-    print(f"  Índice: {atual}")
+        raise Exception(f'Seleção não mudou: esperado "{alvo["text"]}", está "{atual}".')
+    print(f"  Selecionado: {atual}")
+
+
+# ── Uso do Totem pelo Relatório de Venda (04/10/2026) ──────────────────────────
+# Financeiro › Relatório de Venda, Tipo Faturamento, Variável "Qtd. Pessoas
+# Atendidas", Agrupamento Diário: uma linha por franquia e uma coluna por dia.
+# Sem filtro dá os clientes da loja (= "pessoas" dos indicadores, conferido
+# SJP 1 01–02/10/2026: 126 e 111); com Tipo Venda = Totem, os do Totem.
+# Substitui o ranking com o Índice "Pessoas Atendidas", que respondia
+# "nenhum registro" para o coletor.
+
+RELATORIO_VENDA_URL = "https://itfgestor.com.br/ITFGestor/finRelVendaPDV2.jsf"
+
+
+def ler_pessoas_por_dia(page, store: dict, dias: list[str], tipo_venda: str | None) -> dict[str, int]:
+    """Clientes atendidos por dia ("dd/mm/aaaa" → pessoas) da loja ativa, de
+    min(dias) a max(dias). `tipo_venda`: None = todos, "Totem" = só o Totem."""
+    ordenados = sorted(dias, key=lambda d: d[6:10] + d[3:5] + d[0:2])
+    page.goto(RELATORIO_VENDA_URL, wait_until="load", timeout=30000)
+    wait_bip_idle(page, timeout=45)
+    selecionar_no_campo(page, "Variável", "Qtd. Pessoas Atendidas")
+    selecionar_no_campo(page, "Agrupamento", "Diário")
+    if tipo_venda:
+        selecionar_no_campo(page, "Tipo Venda", tipo_venda)
+    set_report_dates(page, f"{ordenados[0]} 00:00", f"{ordenados[-1]} 23:59")
+    time.sleep(0.5)
+    click_pesquisar(page)
+    wait_bip_idle(page, timeout=45)
+
+    tabela: dict = {}
+    deadline = time.time() + 75
+    while time.time() < deadline:
+        tabela = page.evaluate(r"""() => {
+            const body = (document.body.innerText || '').toLowerCase();
+            for (const t of document.querySelectorAll('table')) {
+                const cab = Array.from(t.querySelectorAll('thead th')).map(th => (th.innerText || '').trim());
+                if (!cab.some(c => /^\d{2}\/\d{2}\/\d{4}/.test(c))) continue;
+                const linhas = Array.from(t.querySelectorAll('tbody tr'))
+                    .map(tr => Array.from(tr.querySelectorAll('td')).map(td => (td.innerText || '').trim()))
+                    .filter(l => l.length === cab.length);
+                return {cab, linhas, nenhum: false};
+            }
+            return {cab: [], linhas: [], nenhum: body.includes('nenhum registro')};
+        }""")
+        if tabela.get("cab") or tabela.get("nenhum"):
+            break
+        time.sleep(1)
+    rotulo = tipo_venda or "todos"
+    print(f"  Relatório de Venda ({rotulo}) {ordenados[0]}–{ordenados[-1]}: "
+          f"{len(tabela.get('linhas') or [])} linha(s), nenhum_registro={tabela.get('nenhum')}")
+    if not tabela.get("cab"):
+        if tabela.get("nenhum"):
+            return {}
+        save_debug(page, f"relatorio_venda_{store['key']}_{rotulo}")
+        print_page_snapshot(page, f"relatorio_venda_{store['key']}_{rotulo}")
+        raise Exception(f"Relatório de Venda ({rotulo}) não ficou pronto.")
+
+    cab, linhas = tabela["cab"], tabela["linhas"]
+    i_franquia = next((i for i, c in enumerate(cab) if normalize(c).strip() == "franquia"), None)
+    dados = [l for l in linhas if i_franquia is not None and normalize(l[i_franquia]).strip()]
+    if len(dados) != 1:
+        raise Exception(f"Relatório de Venda ({rotulo}): esperada 1 franquia, vieram {len(dados)}.")
+    linha = dados[0]
+    mesma = lambda t: re.sub(r"\s+", " ", normalize(t)).strip()
+    if mesma(linha[i_franquia]) != mesma(store["bip_name"]):
+        raise Exception(
+            f"Relatório de Venda ({rotulo}) é de \"{linha[i_franquia]}\", esperado \"{store['bip_name']}\"."
+        )
+    resultado: dict[str, int] = {}
+    for i, c in enumerate(cab):
+        m = re.match(r"^(\d{2}/\d{2}/\d{4})", c)
+        if not m:
+            continue
+        bruto = linha[i]
+        texto = re.sub(r"[^0-9,.-]", "", bruto).replace(".", "").replace(",", ".")
+        valor = float(texto) if texto else 0.0
+        if valor < 0 or valor != int(valor):
+            raise Exception(f'Pessoas inválido em {m.group(1)} ({rotulo}): {bruto!r}.')
+        resultado[m.group(1)] = int(valor)
+    return resultado
+
+
+def coletar_totem(page, store: dict, cliente, dias: list[str]) -> None:
+    """Clientes da loja e do Totem nos `dias`, para o banco (% de uso do Totem)."""
+    totais = ler_pessoas_por_dia(page, store, dias, None)
+    totem = ler_pessoas_por_dia(page, store, dias, "Totem")
+    com_venda = [d for d in dias if totais.get(d, 0) > 0]
+    # O filtro que não pega devolve o total de novo: 100% em todo dia seria
+    # Totem liberado por engano.
+    if com_venda and all(totem.get(d, 0) == totais[d] for d in com_venda):
+        raise Exception(f"Filtro Totem não aplicado: os números são iguais ao total em {com_venda}.")
+    for d in dias:
+        cliente.enviar_totem(store["key"], d, totem.get(d, 0), totais.get(d, 0))
 
 
 def download_atendimentos_dia(page, store: dict, download_dir: str, day_start: str,
@@ -2180,28 +2306,18 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                 hist_pending += 1
                 print(f"  ⚠️ Histórico {hist_date} falhou: {he}")
 
-    # ── Atendimentos por operador (só banco; % de uso do Totem) ──
-    # Nunca derruba a loja nem a planilha: falha vira aviso e o dia fica para
-    # a próxima execução (o banco diz o que já tem).
+    # ── Uso do Totem (só banco): clientes da loja e do Totem por dia ──
+    # Nunca derruba a loja nem a planilha: falha vira aviso e os dias ficam
+    # para a próxima execução (o banco diz o que já tem).
     if cliente is not None and presentes_atendimentos is not None:
-        limite = 1 + cliente.backfill_max_por_loja
-        for hist_date in hist_days:
-            if (chave_no_banco(store["key"]), hist_date) in presentes_atendimentos:
-                continue
-            if limite <= 0:
-                break
-            limite -= 1
-            hd, hm, hy = hist_date.split("/")
+        faltando = [d for d in hist_days
+                    if (chave_no_banco(store["key"]), d) not in presentes_atendimentos]
+        if faltando:
             try:
-                arq = download_atendimentos_dia(
-                    page, store, tmpdir, f"{hd}/{hm}/{hy} 00:00:00", f"{hd}/{hm}/{hy} 23:59:59",
-                    suffix=f"_{hd}{hm}",
-                )
-                atendimentos = parse_atendimentos_xls(arq) if arq else {}
-                cliente.enviar_atendimentos(store["key"], hist_date, atendimentos)
+                coletar_totem(page, store, cliente, faltando)
             except Exception as ae:
-                print(f"  ⚠️ [banco] atendimentos {store['key']} {hist_date} não coletados: {ae}")
-                save_debug(page, f"atendimentos_{store['key']}_{hd}{hm}")
+                print(f"  ⚠️ [banco] Totem {store['key']} {faltando} não coletado: {ae}")
+                save_debug(page, f"totem_{store['key']}")
 
     # ── Ticket Médio mensal ──
     tm_file_path = download_tm_xls(page, store, tmpdir)

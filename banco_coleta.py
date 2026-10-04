@@ -155,6 +155,21 @@ class ClienteColeta:
             log.info("  [banco] indicadores %s %s gravados", loja, data_br)
         return resposta is not None
 
+    def enviar_totem(self, loja: str, data_br: str, pessoas_totem: int, pessoas_loja: int) -> bool:
+        """Clientes atendidos pelo Totem e pela loja em UM dia (Relatório de
+        Venda, Qtd. Pessoas Atendidas). Base do % de uso do Totem."""
+        resposta = self._enviar({
+            "acao": "totem",
+            "loja": chave_no_banco(loja),
+            "data": data_iso(data_br),
+            "pessoas_totem": int(pessoas_totem),
+            "pessoas_loja": int(pessoas_loja),
+        })
+        if resposta is not None:
+            log.info("  [banco] Totem %s %s: %d de %d cliente(s)", loja, data_br,
+                     pessoas_totem, pessoas_loja)
+        return resposta is not None
+
     def enviar_atendimentos(self, loja: str, data_br: str, atendimentos: dict[str, int]) -> bool:
         """Clientes atendidos por operador em UM dia de UMA loja (relatório de
         ranking, índice Pessoas Atendidas). Base do % de uso do Totem. Dia sem
