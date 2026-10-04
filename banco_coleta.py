@@ -111,8 +111,11 @@ class ClienteColeta:
         return None
 
     # ── Ações ─────────────────────────────────────────────────────────────
-    def enviar_vendas(self, loja: str, data_br: str, operadores: dict[str, dict]) -> bool:
-        """Vendas de UM dia de UMA loja, por operador. Dia sem venda: operadores={}."""
+    def enviar_vendas(self, loja: str, data_br: str, operadores: dict[str, dict],
+                      linhas: list[dict] | None = None) -> bool:
+        """Vendas de UM dia de UMA loja, por operador. Dia sem venda: operadores={}.
+        `linhas`: as linhas cruas do relatório ({operador, produto, quantidade}),
+        que o banco classifica pelas regras cadastradas; [] = dia sem venda."""
         lista = [
             {
                 "nome": nome,
@@ -124,14 +127,18 @@ class ClienteColeta:
             }
             for nome, valores in operadores.items()
         ]
-        resposta = self._enviar({
+        corpo = {
             "acao": "vendas",
             "loja": chave_no_banco(loja),
             "data": data_iso(data_br),
             "operadores": lista,
-        })
+        }
+        if linhas is not None:
+            corpo["linhas"] = linhas
+        resposta = self._enviar(corpo)
         if resposta is not None:
-            log.info("  [banco] vendas %s %s: %s linha(s)", loja, data_br, resposta.get("linhas"))
+            log.info("  [banco] vendas %s %s: %s linha(s), %s linha(s) de produto", loja, data_br,
+                     resposta.get("linhas"), "sem" if linhas is None else len(linhas))
         return resposta is not None
 
     def enviar_indicadores(self, loja: str, data_br: str, receita: float,

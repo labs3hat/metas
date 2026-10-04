@@ -1753,8 +1753,14 @@ def normalize_operator_name(name: str) -> str:
     return name or "Operador"
 
 
-def parse_xls_by_operator(file_path: str, store_key: str = "") -> tuple[dict, dict]:
+def parse_xls_by_operator(file_path: str, store_key: str = "",
+                          linhas: list[dict] | None = None) -> tuple[dict, dict]:
     """Parse Venda de Produto por Operador XLS.
+
+    `linhas`, se informada, recebe TODAS as linhas do relatório (operador,
+    produto, quantidade), classificadas ou não — o banco do sistema novo
+    classifica pelas regras cadastradas. Linha repetida no mesmo XLS entra uma
+    vez só, pelo mesmo critério do total abaixo.
 
     Returns:
       totals: {shake, chantilly, agua, milk}
@@ -1771,6 +1777,7 @@ def parse_xls_by_operator(file_path: str, store_key: str = "") -> tuple[dict, di
     operators = {}
     debug_rows = []
     seen_rows = set()
+    vistas_linhas = set()
     skipped_duplicates = 0
     parse_errors = 0
 
@@ -1841,6 +1848,13 @@ def parse_xls_by_operator(file_path: str, store_key: str = "") -> tuple[dict, di
 
             if qty <= 0:
                 continue
+
+            if linhas is not None:
+                chave_linha = (operador.strip().lower(), produto.strip().lower(), round(float(qty), 4))
+                if chave_linha not in vistas_linhas:
+                    vistas_linhas.add(chave_linha)
+                    linhas.append({"operador": operador, "produto": produto,
+                                   "quantidade": round(float(qty), 3)})
 
             cat = classify(produto)
 
@@ -2120,8 +2134,9 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
             hist_file = download_xls_daterange(
                 page, store, tmpdir, day_start, day_end, suffix=f"_hist_{hd}{hm}"
             )
+            hist_linhas: list[dict] = []
             if hist_file and os.path.exists(hist_file):
-                _, hist_ops = parse_xls_by_operator(hist_file)
+                _, hist_ops = parse_xls_by_operator(hist_file, linhas=hist_linhas)
                 hist_totals = {
                     cat: sum(op.get(cat, 0) for op in hist_ops.values())
                     for cat in ["shake", "chantilly", "agua", "milk", "canecake"]
@@ -2137,7 +2152,7 @@ def process_store(page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
                                  store["key"], hist_date,
                                  {"shake": 0, "chantilly": 0, "agua": 0, "milk": 0, "canecake": 0})
             if cliente is not None:
-                cliente.enviar_vendas(store["key"], hist_date, hist_ops)
+                cliente.enviar_vendas(store["key"], hist_date, hist_ops, hist_linhas)
         except Exception as he:
             if ja_na_planilha:
                 # Dia buscado só para o banco: a planilha já está completa, então
