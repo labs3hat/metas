@@ -1546,9 +1546,15 @@ def ler_pessoas_por_dia(page, store: dict, dias: list[str], tipo_venda: str | No
 
 
 def coletar_totem(page, store: dict, cliente, dias: list[str]) -> None:
-    """Clientes da loja e do Totem nos `dias`, para o banco (% de uso do Totem)."""
-    totais = ler_pessoas_por_dia(page, store, dias, None)
-    totem = ler_pessoas_por_dia(page, store, dias, "Totem")
+    """Clientes da loja e do Totem nos `dias`, para o banco (% de uso do Totem).
+    Uma busca por mês: em 04/10/2026 a busca de 27/09 a 03/10 trouxe só os
+    dias de outubro."""
+    totais: dict[str, int] = {}
+    totem: dict[str, int] = {}
+    for mes in sorted({d[3:10] for d in dias}):
+        do_mes = [d for d in dias if d[3:10] == mes]
+        totais.update(ler_pessoas_por_dia(page, store, do_mes, None))
+        totem.update(ler_pessoas_por_dia(page, store, do_mes, "Totem"))
     com_venda = [d for d in dias if totais.get(d, 0) > 0]
     # O filtro que não pega devolve o total de novo: 100% em todo dia seria
     # Totem liberado por engano.
