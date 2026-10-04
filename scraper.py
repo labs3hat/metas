@@ -1133,13 +1133,19 @@ def click_pesquisar(page):
     # Médio", "text=Pesquisar" pega outro elemento e a busca nunca sai (o
     # diagnóstico de 04/10/2026 viu só o POST da troca de Índice). É o mesmo
     # botão que as vendas já acionavam (form:botaoPesquisar no POST).
+    # A lista do Índice, recém-escolhida, pode ficar aberta POR CIMA do botão
+    # (diagnóstico de 04/10/2026: "comboIndice_panel intercepts pointer
+    # events"); aí o clique de mouse não chega. Disparar o click no próprio
+    # botão aciona a busca sem tocar na lista (clicar "à força" acertaria um
+    # item da lista e trocaria o Índice).
     botao = page.locator('[id="form:botaoPesquisar"]')
-    try:
-        if botao.count() > 0 and botao.first.is_visible():
-            botao.first.click(timeout=15000)
-            return
-    except Exception as e:
-        print(f"  ⚠️ Pesquisar pelo id falhou ({e}); tentando pelo texto")
+    if botao.count() > 0 and botao.first.is_visible():
+        try:
+            botao.first.click(timeout=5000)
+        except Exception as e:
+            print(f"  Pesquisar coberto ({type(e).__name__}); acionando o botão direto")
+            botao.first.dispatch_event("click")
+        return
 
     # Botão azul "Pesquisar" da tela.
     try:
