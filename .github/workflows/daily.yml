@@ -2,8 +2,16 @@ name: BIP360 Daily Scraper
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    # 03:07 BRT = 06:07 UTC. Minuto quebrado de propósito: o GitHub atrasa os
+    # agendamentos da virada da hora (em out/2026, 5 a 6 horas).
+    - cron: "7 6 * * *"
   workflow_dispatch:
+
+# Uma execução por vez: o watchdog pode disparar enquanto o agendamento
+# atrasado também começa. A segunda espera a primeira (mesmo usuário no BIP360).
+concurrency:
+  group: bip360-daily
+  cancel-in-progress: false
 
 jobs:
   scrape:

@@ -1,8 +1,14 @@
 name: Watchdog — Re-run on Failure
 
-# Roda 1h após cada scraper:
-#   05:00 BRT = 08:00 UTC → verifica Indicadores (02:00 BRT)
-#   06:00 BRT = 09:00 UTC → verifica Daily Scraper (03:00 BRT)
+# Confere os DOIS coletores (Indicadores e Daily) a cada execução e dispara de
+# novo quem não terminou com sucesso hoje. Duas execuções por dia, em minutos
+# quebrados, para ter uma segunda chance.
+#
+# Até 04/10/2026 o watchdog deduzia pela hora UTC qual coletor conferir ("08"
+# = indicadores). Com o GitHub atrasando os agendamentos em 5 a 6 horas, ele
+# nunca rodava às 08: conferia o Daily duas vezes e nunca os Indicadores.
+#
+# Coletor rodando ou na fila não é falha: não dispara outro em cima.
 #
 # Pré-requisito: secret GH_TOKEN com permissão actions:write
 #   → GitHub → Settings → Secrets → Actions → New repository secret
@@ -11,16 +17,17 @@ name: Watchdog — Re-run on Failure
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # 05:00 BRT → verifica indicadores_daily
-    - cron: "0 9 * * *"   # 06:00 BRT → verifica daily
+    - cron: "37 8 * * *"    # 05:37 BRT
+    - cron: "37 10 * * *"   # 07:37 BRT — segunda chance
   workflow_dispatch:
     inputs:
       target:
-        description: "Workflow a verificar manualmente (daily ou indicadores)"
+        description: "Workflow a verificar manualmente (daily, indicadores ou ambos)"
         required: true
-        default: "daily"
+        default: "ambos"
         type: choice
         options:
+          - ambos
           - daily
           - indicadores
 
@@ -30,108 +37,66 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Determinar qual workflow verificar
-        id: target
+      - name: Conferir e disparar de novo quem falhou
         env:
-          # GitHub não expõe diretamente qual cron disparou,
-          # mas expõe a hora UTC do evento — usamos isso para inferir.
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           MANUAL_TARGET: ${{ inputs.target }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "workflow=$MANUAL_TARGET" >> "$GITHUB_OUTPUT"
-          else
-            # Infere pelo horário UTC atual (com margem de ±10min)
-            HOUR=$(date -u +%H)
-            if [ "$HOUR" = "08" ]; then
-              echo "workflow=indicadores" >> "$GITHUB_OUTPUT"
-            else
-              echo "workflow=daily" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      - name: Mapear nome do arquivo yml
-        id: yml
-        env:
-          TARGET: ${{ steps.target.outputs.workflow }}
-        run: |
-          if [ "$TARGET" = "indicadores" ]; then
-            echo "filename=indicadores_daily.yml" >> "$GITHUB_OUTPUT"
-            echo "label=BIP360 Indicadores Diários" >> "$GITHUB_OUTPUT"
-          else
-            echo "filename=daily.yml" >> "$GITHUB_OUTPUT"
-            echo "label=BIP360 Daily Scraper" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Verificar último run via GitHub API
-        id: check
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          REPO: ${{ github.repository }}
-          FILENAME: ${{ steps.yml.outputs.filename }}
-          LABEL: ${{ steps.yml.outputs.label }}
-        run: |
+          set -euo pipefail
           TODAY=$(date -u +%Y-%m-%d)
-          echo "Verificando workflow: $LABEL ($FILENAME) — data esperada: $TODAY"
 
-          # Busca os últimos 5 runs do workflow
-          RESPONSE=$(curl -s \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?per_page=5")
-
-          # Extrai status e data do run mais recente
-          LATEST_STATUS=$(echo "$RESPONSE" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          runs = data.get('workflow_runs', [])
-          if not runs:
-              print('no_runs')
-          else:
-              r = runs[0]
-              print(r.get('conclusion') or r.get('status') or 'unknown')
-          ")
-
-          LATEST_DATE=$(echo "$RESPONSE" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          runs = data.get('workflow_runs', [])
-          if not runs:
-              print('')
-          else:
-              # created_at ex: '2026-05-14T06:02:11Z'
-              print(runs[0].get('created_at','')[:10])
-          ")
-
-          echo "Último run: status=$LATEST_STATUS  data=$LATEST_DATE"
-
-          # Decide se precisa re-run
-          if [ "$LATEST_STATUS" = "success" ] && [ "$LATEST_DATE" = "$TODAY" ]; then
-            echo "OK — scraper já rodou com sucesso hoje."
-            echo "needs_rerun=false" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$MANUAL_TARGET" != "ambos" ]; then
+            TARGETS="$MANUAL_TARGET"
           else
-            echo "ALERTA — scraper não completou com sucesso hoje (status=$LATEST_STATUS, data=$LATEST_DATE). Acionando re-run."
-            echo "needs_rerun=true" >> "$GITHUB_OUTPUT"
+            TARGETS="indicadores daily"
           fi
 
-      - name: Disparar re-run via workflow_dispatch
-        if: steps.check.outputs.needs_rerun == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          REPO: ${{ github.repository }}
-          FILENAME: ${{ steps.yml.outputs.filename }}
-        run: |
-          echo "Disparando $FILENAME via workflow_dispatch..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/dispatches" \
-            -d '{"ref":"main"}')
+          FALHAS=0
+          for TARGET in $TARGETS; do
+            if [ "$TARGET" = "indicadores" ]; then
+              FILENAME=indicadores_daily.yml; LABEL="BIP360 Indicadores Diários"
+            else
+              FILENAME=daily.yml; LABEL="BIP360 Daily Scraper"
+            fi
 
-          if [ "$HTTP_STATUS" = "204" ]; then
-            echo "Re-run disparado com sucesso (HTTP 204)."
-          else
-            echo "::error::Falha ao disparar re-run. HTTP status: $HTTP_STATUS"
-            exit 1
-          fi
+            RESPONSE=$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?per_page=5")
+
+            # Situação de hoje: "rodando" se algum run de hoje está na fila ou
+            # rodando; "ok" se algum terminou com sucesso hoje; senão "falhou".
+            SITUACAO=$(echo "$RESPONSE" | TODAY="$TODAY" python3 -c "
+          import json, os, sys
+          hoje = os.environ['TODAY']
+          runs = [r for r in json.load(sys.stdin).get('workflow_runs', [])
+                  if r.get('created_at', '')[:10] == hoje]
+          if any(r.get('status') in ('queued', 'in_progress', 'waiting', 'requested', 'pending') for r in runs):
+              print('rodando')
+          elif any(r.get('conclusion') == 'success' for r in runs):
+              print('ok')
+          else:
+              print('falhou')
+          ")
+            echo "$LABEL ($FILENAME) em $TODAY: $SITUACAO"
+
+            if [ "$SITUACAO" = "falhou" ]; then
+              echo "ALERTA — $LABEL não terminou com sucesso hoje. Disparando de novo."
+              HTTP_STATUS=$(curl -sS --max-time 30 -o /dev/null -w "%{http_code}" \
+                -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/dispatches" \
+                -d '{"ref":"main"}')
+              if [ "$HTTP_STATUS" = "204" ]; then
+                echo "Re-run de $FILENAME disparado (HTTP 204)."
+              else
+                echo "::error::Falha ao disparar $FILENAME. HTTP status: $HTTP_STATUS"
+                FALHAS=$((FALHAS + 1))
+              fi
+            fi
+          done
+
+          exit $FALHAS

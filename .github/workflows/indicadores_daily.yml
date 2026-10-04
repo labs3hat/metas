@@ -2,9 +2,16 @@ name: BIP360 Indicadores Diários
 
 on:
   schedule:
-    # 02:00 BRT = 05:00 UTC
-    - cron: "0 5 * * *"
+    # 02:13 BRT = 05:13 UTC. Minuto quebrado de propósito: o GitHub atrasa os
+    # agendamentos da virada da hora (em out/2026, 5 a 6 horas).
+    - cron: "13 5 * * *"
   workflow_dispatch:
+
+# Uma execução por vez: o watchdog pode disparar enquanto o agendamento
+# atrasado também começa. A segunda espera a primeira (mesmo usuário no BIP360).
+concurrency:
+  group: bip360-indicadores
+  cancel-in-progress: false
 
 jobs:
   scrape:
