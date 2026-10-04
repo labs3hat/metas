@@ -5,7 +5,7 @@ name: Diagnóstico do ranking (só leitura)
 on:
   push:
     branches: [claude/funny-archimedes-v3vh3p]
-    paths: [diagnostico_ranking.py, .github/workflows/diagnostico.yml]
+    paths: [diagnostico_ranking.py, scraper.py, banco_coleta.py, .github/workflows/diagnostico.yml]
 
 jobs:
   diagnostico:
