@@ -1436,18 +1436,31 @@ def download_atendimentos_dia(page, store: dict, download_dir: str, day_start: s
                               day_end: str, suffix: str = "") -> str | None:
     """Exporta o ranking de UM dia com o índice Pessoas Atendidas. None = sem venda."""
     go_to_report(page)
-    set_report_dates(page, day_start, day_end)
+    # O Índice ANTES das datas: trocá-lo re-renderiza o formulário e as datas
+    # voltam ao padrão. Em 04/10/2026 a busca saiu assim para todas as lojas e
+    # o BIP360 respondeu "nenhum registro" — lido como dia sem venda.
     selecionar_indice(page, ROTULO_INDICE_PESSOAS)
+    set_report_dates(page, day_start, day_end)
     time.sleep(0.5)
     click_pesquisar(page)  # obrigatório depois de trocar o Índice
     wait_bip_idle(page, timeout=45)
 
     state = page.evaluate("""() => {
         const body = document.body.innerText || '';
-        const hasXls = !!document.querySelector('img[src*="xls" i]');
-        const hasNoRecords = body.toLowerCase().includes('nenhum registro');
-        return {hasXls, hasNoRecords};
+        const valor = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+        return {
+            hasXls: !!document.querySelector('img[src*="xls" i]'),
+            hasNoRecords: body.toLowerCase().includes('nenhum registro'),
+            inicio: valor('form:inputDataInicial_input'),
+            fim: valor('form:inputDataFinal_input'),
+        };
     }""")
+    print(f"  Atendimentos: busca de {state.get('inicio')!r} a {state.get('fim')!r} | "
+          f"xls={state.get('hasXls')} nenhum_registro={state.get('hasNoRecords')}")
+    if state.get("inicio") is not None and str(state["inicio"])[:10] != day_start[:10]:
+        raise Exception(
+            f"Busca de atendimentos saiu com a data {state['inicio']!r}, esperado {day_start[:10]}."
+        )
     if state.get("hasNoRecords") and not state.get("hasXls"):
         return None
 
