@@ -188,6 +188,20 @@ class ClienteColeta:
                      loja, data_br, len(atendimentos), total)
         return resposta is not None
 
+    def enviar_operadores(self, loja: str, data_br: str, operadores: list[dict]) -> bool:
+        """Receita e clientes por operador em UM dia de UMA loja (ranking,
+        Índices Valor e Pessoas Atendidas): [{nome, pessoas, receita}]. Dia sem
+        venda: lista vazia."""
+        resposta = self._enviar({
+            "acao": "operadores",
+            "loja": chave_no_banco(loja),
+            "data": data_iso(data_br),
+            "operadores": operadores,
+        })
+        if resposta is not None:
+            log.info("  [banco] operadores %s %s: %d operador(es)", loja, data_br, len(operadores))
+        return resposta is not None
+
     def dias_presentes(self, tipo: str, datas_br: list[str]) -> set[tuple[str, str]] | None:
         """(loja NA CHAVE DO BANCO, 'DD/MM/AAAA') já gravados no banco — compare
         com chave_no_banco(sua_chave). None se não deu para perguntar: aí
