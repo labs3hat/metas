@@ -1445,24 +1445,42 @@ def download_atendimentos_dia(page, store: dict, download_dir: str, day_start: s
     click_pesquisar(page)  # obrigatório depois de trocar o Índice
     wait_bip_idle(page, timeout=45)
 
-    state = page.evaluate("""() => {
-        const body = document.body.innerText || '';
-        const valor = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
-        return {
-            hasXls: !!document.querySelector('img[src*="xls" i]'),
-            hasNoRecords: body.toLowerCase().includes('nenhum registro'),
-            inicio: valor('form:inputDataInicial_input'),
-            fim: valor('form:inputDataFinal_input'),
-        };
-    }""")
+    # Como em download_xls: a tabela demora a vir depois do Pesquisar, e com
+    # este Índice o export é XLSX (ícone pode ser "excel"). Em 04/10/2026 uma
+    # olhada só, logo após o Pesquisar, via a tabela vazia — "sem venda" errado.
+    deadline = time.time() + 75
+    state: dict = {}
+    while time.time() < deadline:
+        state = page.evaluate("""() => {
+            const body = document.body.innerText || '';
+            const valor = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+            const linhas = Array.from(document.querySelectorAll('table tbody tr'))
+                .map(r => (r.innerText || '').trim())
+                .filter(t => t.length > 0 && !/nenhum registro/i.test(t)).length;
+            return {
+                linhas,
+                hasXls: !!document.querySelector('img[src*="xls" i], img[src*="excel" i]'),
+                hasNoRecords: body.toLowerCase().includes('nenhum registro'),
+                inicio: valor('form:inputDataInicial_input'),
+                fim: valor('form:inputDataFinal_input'),
+            };
+        }""")
+        if state.get("hasXls") and state.get("linhas", 0) > 0:
+            break
+        time.sleep(1)
     print(f"  Atendimentos: busca de {state.get('inicio')!r} a {state.get('fim')!r} | "
-          f"xls={state.get('hasXls')} nenhum_registro={state.get('hasNoRecords')}")
+          f"linhas={state.get('linhas')} xls={state.get('hasXls')} "
+          f"nenhum_registro={state.get('hasNoRecords')}")
     if state.get("inicio") is not None and str(state["inicio"])[:10] != day_start[:10]:
         raise Exception(
             f"Busca de atendimentos saiu com a data {state['inicio']!r}, esperado {day_start[:10]}."
         )
-    if state.get("hasNoRecords") and not state.get("hasXls"):
-        return None
+    if not (state.get("hasXls") and state.get("linhas", 0) > 0):
+        save_debug(page, f"atendimentos_sem_tabela_{store['key']}{suffix}")
+        print_page_snapshot(page, f"atendimentos_sem_tabela_{store['key']}{suffix}")
+        if state.get("hasNoRecords"):
+            return None  # o banco recusa lista vazia em dia com venda; tenta de novo amanhã
+        raise Exception(f"Tabela de atendimentos não ficou pronta: {state}")
 
     download = click_xls_export(page)
     file_path = os.path.join(download_dir, f"{store['key']}{suffix}_atendimentos.xls")
