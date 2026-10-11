@@ -159,6 +159,16 @@ SHEET_TAB_PREFIX  = "Indicadores de Venda"
 # apenas as combinações loja+dia que estiverem vazias (auto-corretivo).
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "7"))
 
+# Dias mais recentes recoletados SEMPRE, não só quando a célula está vazia:
+# o BIP360 pode receber a venda da loja depois das 02:13 e a célula ficaria
+# baixa para sempre (09/08/2026: 9 lojas com um terço do dia). A célula só é
+# sobrescrita quando a receita nova for MAIOR que a gravada.
+RECONFERIR_DIAS = int(os.environ.get("RECONFERIR_DIAS", "3"))
+
+# Recoleta pontual, fora da janela: "dd/mm/aaaa[:loja,loja];dd/mm/aaaa".
+# Sem loja = todas. Mesma regra: só grava se a receita nova for maior.
+RECOLETAR = os.environ.get("RECOLETAR", "").strip()
+
 
 def get_sheet_tab(year: int) -> str:
     """Retorna o nome da aba do ano informado, ex: 'Indicadores de Venda 2026'."""
@@ -234,6 +244,28 @@ def build_dates_window(days: int) -> list[dict]:
     """Retorna a janela D-1..D-N (mais recente primeiro) no fuso de São Paulo."""
     now_br = br_now()
     return [_date_info(now_br - timedelta(days=i)) for i in range(1, days + 1)]
+
+
+def parse_recoletar(spec: str) -> dict[str, list[dict]]:
+    """'09/08/2026:ctba11,mga3;18/08/2026' → {loja: [date_info, ...]}.
+    Data sem loja vale para todas. Erro de digitação para a execução na hora,
+    em vez de coletar o dia errado."""
+    out: dict[str, list[dict]] = {}
+    for item in filter(None, (p.strip() for p in spec.split(";"))):
+        data_txt, _, lojas_txt = item.partition(":")
+        try:
+            d = datetime.strptime(data_txt.strip(), "%d/%m/%Y").replace(tzinfo=TZ_BR)
+        except ValueError as exc:
+            raise ValueError(f"RECOLETAR: data inválida {data_txt!r} (use dd/mm/aaaa)") from exc
+        if d >= br_now().replace(hour=0, minute=0, second=0, microsecond=0):
+            raise ValueError(f"RECOLETAR: {data_txt!r} ainda não fechou; só até D-1")
+        lojas = [l.strip() for l in lojas_txt.split(",") if l.strip()] or list(LOJA_ORDER)
+        desconhecidas = [l for l in lojas if l not in LOJA_ORDER]
+        if desconhecidas:
+            raise ValueError(f"RECOLETAR: loja(s) desconhecida(s) {desconhecidas}; use {LOJA_ORDER}")
+        for loja in lojas:
+            out.setdefault(loja, []).append(_date_info(d))
+    return out
 
 
 # ── DATACLASS DE RESULTADO ────────────────────────────────────────────────────
@@ -904,10 +936,13 @@ def _col_letter(n: int) -> str:
     return letters
 
 
-def read_missing_combos(dates: list[dict], ws_cache: dict) -> dict[str, list[dict]]:
+ValoresPlanilha = dict[tuple[str, str], tuple[str, str, str]]
+
+
+def read_sheet_values(dates: list[dict], ws_cache: dict) -> ValoresPlanilha:
     """
-    Lê a planilha e retorna {store_key: [date_info, ...]} das combinações
-    loja+dia em que qualquer uma das 3 métricas está vazia.
+    Lê a planilha e retorna {(store_key, label): (receita, tm, pessoas)}
+    como está nas células — números sem formatação, "" quando vazia.
 
     Faz no máximo 1 batch_get (3 ranges) por mês envolvido na janela —
     tipicamente 1-2 chamadas de API no total.
@@ -918,7 +953,7 @@ def read_missing_combos(dates: list[dict], ws_cache: dict) -> dict[str, list[dic
     for d in dates:
         by_month[(d["year"], d["month"])].append(d)
 
-    missing: dict[str, list[dict]] = defaultdict(list)
+    valores: ValoresPlanilha = {}
 
     for (year, month), dlist in sorted(by_month.items()):
         if year not in ws_cache:
@@ -935,7 +970,9 @@ def read_missing_combos(dates: list[dict], ws_cache: dict) -> dict[str, list[dic
             r2 = r1 + len(LOJA_ORDER) - 1
             ranges.append(f"{_col_letter(c1)}{r1}:{_col_letter(c2)}{r2}")
 
-        blocks = ws.batch_get(ranges)
+        # UNFORMATTED_VALUE: número cru, para comparar com a coleta nova
+        # (o formato "R$1.193" perderia os centavos e trocaria o separador).
+        blocks = ws.batch_get(ranges, value_render_option="UNFORMATTED_VALUE")
 
         for d in dlist:
             day_off = _col_for_day(d["day"]) - c1
@@ -945,23 +982,78 @@ def read_missing_combos(dates: list[dict], ws_cache: dict) -> dict[str, list[dic
                     row = block[idx] if idx < len(block) else []
                     v = row[day_off] if day_off < len(row) else ""
                     vals.append(str(v).strip())
-                if any(v == "" for v in vals):
-                    missing[key].append(d)
+                valores[(key, d["label"])] = (vals[0], vals[1], vals[2])
 
-    return dict(missing)
+    return valores
 
 
-def write_all_metrics(all_metrics: list[StoreMetrics], ws_cache: dict) -> int:
+def read_missing_combos(
+    dates: list[dict], ws_cache: dict
+) -> tuple[dict[str, list[dict]], ValoresPlanilha]:
+    """
+    {store_key: [date_info, ...]} das combinações loja+dia em que qualquer
+    uma das 3 métricas está vazia, mais os valores lidos (para a reconferência).
+    """
+    from collections import defaultdict
+
+    valores = read_sheet_values(dates, ws_cache)
+    missing: dict[str, list[dict]] = defaultdict(list)
+    for d in dates:
+        for key in LOJA_ORDER:
+            if any(v == "" for v in valores.get((key, d["label"]), ("", "", ""))):
+                missing[key].append(d)
+    return dict(missing), valores
+
+
+def _receita_gravada(valores: ValoresPlanilha, key: str, label: str) -> float | None:
+    """Receita que está na célula, ou None se vazia / não numérica."""
+    texto = valores.get((key, label), ("", "", ""))[0]
+    if texto == "":
+        return None
+    try:
+        return float(texto)
+    except ValueError:
+        return None
+
+
+def write_all_metrics(
+    all_metrics: list[StoreMetrics],
+    ws_cache: dict,
+    valores_planilha: ValoresPlanilha | None = None,
+    reconferir: set[tuple[str, str]] | None = None,
+) -> int:
     """
     Escreve todas as métricas coletadas em lote — uma única chamada
     update_cells por aba de ano. Retorna o número de erros de escrita.
+
+    Combinações em `reconferir` já têm valor na planilha: só são gravadas
+    quando a receita coletada agora for maior que a gravada (dia que o
+    BIP360 completou depois da coleta). Nunca se grava um valor menor.
     """
     from collections import defaultdict
     from gspread.cell import Cell
 
+    valores_planilha = valores_planilha or {}
+    reconferir = reconferir or set()
+
     by_year: dict[int, list[StoreMetrics]] = defaultdict(list)
+    mantidos = 0
     for m in all_metrics:
+        if (m.store_key, m.date["label"]) in reconferir:
+            atual = _receita_gravada(valores_planilha, m.store_key, m.date["label"])
+            if atual is not None and m.receita <= atual + 0.005:
+                mantidos += 1
+                continue
+            log.info(
+                "  CORRIGIDO %s %s: receita %s → %.2f (pessoas %s → %d)",
+                m.store_key, m.date["label"],
+                "vazio" if atual is None else f"{atual:.2f}", m.receita,
+                valores_planilha.get((m.store_key, m.date["label"]), ("", "", ""))[2] or "vazio",
+                m.pessoas,
+            )
         by_year[m.date["year"]].append(m)
+    if mantidos:
+        log.info("  Reconferência: %d dia(s) já estavam iguais ou maiores; mantidos.", mantidos)
 
     errors = 0
     for year, items in sorted(by_year.items()):
@@ -1004,7 +1096,33 @@ def main():
 
     # 1. Lê a planilha e detecta o que falta (idempotente / auto-corretivo)
     ws_cache: dict[int, gspread.Worksheet] = {}
-    missing = read_missing_combos(window, ws_cache)
+    missing, valores_planilha = read_missing_combos(window, ws_cache)
+
+    # 1b. Reconferência: os RECONFERIR_DIAS mais recentes e os dias pedidos em
+    #     RECOLETAR entram na coleta mesmo preenchidos. Na escrita, só vence o
+    #     valor maior (write_all_metrics).
+    reconferir: set[tuple[str, str]] = set()
+    pedidos: dict[str, list[dict]] = {key: list(window[:max(0, RECONFERIR_DIAS)]) for key in LOJA_ORDER}
+    for key, dlist in parse_recoletar(RECOLETAR).items():
+        pedidos[key].extend(dlist)
+    fora_da_janela = [
+        d for dlist in pedidos.values() for d in dlist
+        if (LOJA_ORDER[0], d["label"]) not in valores_planilha
+    ]
+    if fora_da_janela:
+        unicos = {d["label"]: d for d in fora_da_janela}
+        valores_planilha.update(read_sheet_values(list(unicos.values()), ws_cache))
+    for key, dlist in pedidos.items():
+        ja = {d["label"] for d in missing.get(key, [])}
+        for d in dlist:
+            if d["label"] in ja:
+                continue
+            missing.setdefault(key, []).append(d)
+            reconferir.add((key, d["label"]))
+            ja.add(d["label"])
+    if reconferir:
+        log.info("Reconferência/recoleta: %d combinação(ões) loja+dia já preenchidas serão recoletadas.",
+                 len(reconferir))
 
     # Escrita dupla (banco_coleta.py): o que já está na planilha mas falta no
     # banco também é coletado — só para o banco, limitado por loja para não
@@ -1027,7 +1145,7 @@ def main():
 
     total_pend = sum(len(v) for v in missing.values())
     if total_pend == 0:
-        log.info("Planilha completa nos últimos %d dias. Nada a coletar.", BACKFILL_DAYS)
+        log.info("Planilha completa nos últimos %d dias e nada a reconferir. Nada a coletar.", BACKFILL_DAYS)
         if cliente is not None:
             cliente.registrar_execucao("indicadores", iniciado_em, "sucesso", len(LOJAS), 0, [],
                                        "nada a coletar")
@@ -1105,7 +1223,7 @@ def main():
         m for m in all_metrics if (m.store_key, m.date["label"]) not in somente_banco
     ]
     if para_planilha:
-        sheet_errors = write_all_metrics(para_planilha, ws_cache)
+        sheet_errors = write_all_metrics(para_planilha, ws_cache, valores_planilha, reconferir)
 
     # 3b. Escrita dupla no banco — falha aqui só vira aviso no log.
     if cliente is not None:
@@ -1127,6 +1245,11 @@ def main():
     unresolved = [u for u in unresolved if (u[0], u[1]) not in somente_banco]
     for key, label, motivo in so_do_banco:
         log.warning("  [banco] não recoletado: %s %s (%s) — tenta de novo amanhã", key, label, motivo)
+    # Reconferência que falhou também não é pendência: a célula já tem valor.
+    so_reconferencia = [u for u in unresolved if (u[0], u[1]) in reconferir]
+    unresolved = [u for u in unresolved if (u[0], u[1]) not in reconferir]
+    for key, label, motivo in so_reconferencia:
+        log.warning("  [reconferência] não recoletado: %s %s (%s) — fica como está", key, label, motivo)
 
     if unresolved:
         for key, label, motivo in unresolved:
@@ -1146,8 +1269,7 @@ def main():
     if unresolved or sheet_errors:
         raise RuntimeError(
             f"{len(unresolved)} combinação(ões) loja+dia sem dados e "
-            f"{sheet_errors} erro(s) de escrita. O watchdog irá reprocessar; "
-            f"as células já preenchidas não serão recoletadas."
+            f"{sheet_errors} erro(s) de escrita. O watchdog irá reprocessar."
         )
 
 
