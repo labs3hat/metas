@@ -18,6 +18,10 @@ on:
         description: "Dias recentes recoletados mesmo preenchidos (padrão 3)."
         required: false
         default: "3"
+      timeout_min:
+        description: "Tempo limite do job em minutos (padrão 60; varredura longa até 360)."
+        required: false
+        default: "60"
 
 # Uma execução por vez: o watchdog pode disparar enquanto o agendamento
 # atrasado também começa. A segunda espera a primeira (mesmo usuário no BIP360).
@@ -28,7 +32,8 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    # Agendamento: 60. Varredura por workflow_dispatch pode pedir até 360.
+    timeout-minutes: ${{ fromJSON(inputs.timeout_min || '60') }}
 
     steps:
       - name: Checkout repositório
