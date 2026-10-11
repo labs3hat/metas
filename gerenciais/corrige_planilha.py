@@ -127,12 +127,97 @@ def substitui_celula(xml: str, ref: str, novo: str) -> str:
     return xml[: row.start(1)] + novo_inner + xml[row.end(1):]
 
 
-def corrige(origem: str, destino: str, loja: str) -> list[str]:
+SERIAL_2026_INI, SERIAL_2026_FIM = 46023, 46387  # 01/01/2026 e 31/12/2026 no calendário do Excel
+
+
+def _mes_ano_do_serial(serial: int) -> str:
+    """46253 → '8/2026' (texto que a fórmula de Mês Comp. produz)."""
+    from datetime import date, timedelta
+    d = date(1899, 12, 30) + timedelta(days=serial)
+    return f"{d.month}/{d.year}"
+
+
+def _linhas_2026_sem_formula_mes(xml: str) -> list[tuple[int, int]]:
+    """(linha, serial da Data Comp.) das linhas de 2026 cuja coluna B não é fórmula."""
+    out: list[tuple[int, int]] = []
+    for rm in re.finditer(r'<row r="(\d+)"[^>]*>(.*?)</row>', xml, re.S):
+        n = int(rm.group(1)); inner = rm.group(2)
+        a = re.search(rf'<c r="A{n}"[^>]*?(?:/>|>(.*?)</c>)', inner, re.S)
+        if not a or not a.group(1):
+            continue
+        v = re.search(r"<v>([\d.]+)</v>", a.group(1))
+        if not v:
+            continue
+        serial = int(float(v.group(1)))
+        if not (SERIAL_2026_INI <= serial <= SERIAL_2026_FIM):
+            continue
+        b = re.search(rf'<c r="B{n}"[^>]*?(?:/>|>(.*?)</c>)', inner, re.S)
+        if b and b.group(1) and "<f" in b.group(1):
+            continue
+        out.append((n, serial))
+    return out
+
+
+def corrigir_mes_comp(xml: str) -> tuple[str, list[str]]:
+    """Coluna 'Mês Comp.' da aba Saídas: linhas de 2026 com texto no lugar da fórmula
+    recebem a mesma fórmula explícita das vizinhas. Só mexe nessas células."""
+    modelo = re.search(r'<c r="B\d+"[^>]*><f>([^<]+)</f>', xml)
+    if not modelo:
+        raise ValueError("Saídas: não achei a fórmula de Mês Comp. em nenhuma linha")
+    formula = modelo.group(1)  # já escapada como no XML
+    mudancas: list[str] = []
+    for n, serial in _linhas_2026_sem_formula_mes(xml):
+        ref = f"B{n}"
+        atual = celula(xml, ref)
+        novo = f'<c r="{ref}"{estilo(atual)} t="str"><f>{formula}</f><v>{_mes_ano_do_serial(serial)}</v></c>'
+        xml = substitui_celula(xml, ref, novo)
+        mudancas.append(f"Saídas {ref}: texto → fórmula de Mês Comp. ({_mes_ano_do_serial(serial)})")
+    return xml, mudancas
+
+
+def corrigir_receita(dre: str, receita: dict[int, float], ss: list[str]) -> tuple[str, list[str]]:
+    """Linha 101 (receita de vendas, linha 7) recebe a receita do BIP360 mês a mês e a
+    linha 18 (Receita Bruta Total) volta a ser =SUM(col7:col16) onde estiver digitada."""
+    mudancas: list[str] = []
+    for mes, esperado in sorted(receita.items()):
+        col = MESES[mes - 1]
+        ref = f"{col}7"
+        atual = valor_num(celula(dre, ref), ss)
+        if atual is None or abs(atual - esperado) > 0.5:
+            dre = substitui_celula(dre, ref, f'<c r="{ref}"{estilo(celula(dre, ref))}><v>{esperado:.2f}</v></c>')
+            mudancas.append(f"DRE {ref} (receita 101, mês {mes}): {atual!r} → {esperado:.2f}")
+        ref18 = f"{col}18"
+        v18 = valor(celula(dre, ref18), ss)
+        if not (isinstance(v18, str) and v18.startswith("=")):
+            dre = substitui_celula(dre, ref18, f'<c r="{ref18}"{estilo(celula(dre, ref18))}><f>SUM({col}7:{col}16)</f><v>0</v></c>')
+            mudancas.append(f"DRE {ref18} (Receita Bruta Total, mês {mes}): digitado {v18!r} → =SUM({col}7:{col}16)")
+    return dre, mudancas
+
+
+def valor_num(m: re.Match | None, ss: list[str]) -> float | None:
+    v = valor(m, ss)
+    if v is None or (isinstance(v, str) and v.startswith("=")):
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def corrige(origem: str, destino: str, loja: str, receita: dict[int, float] | None = None) -> list[str]:
     z = zipfile.ZipFile(origem)
     abas = mapa_abas(z); ss = shared_strings(z)
     razao, cnpj = EMPRESAS[loja]
     mudancas: list[str] = []
     partes: dict[str, bytes] = {}
+
+    # ── 0. Saídas: Mês Comp. com fórmula em todas as linhas de 2026 ─────────
+    p_saidas = abas["Saídas"]
+    saidas = z.read(p_saidas).decode("utf-8")
+    saidas, m_saidas = corrigir_mes_comp(saidas)
+    if m_saidas:
+        mudancas.extend(m_saidas)
+        partes[p_saidas] = saidas.encode("utf-8")
 
     # ── 1. DRE 2026 ─────────────────────────────────────────────────────────
     p_dre = abas["DRE 2026"]
@@ -175,6 +260,10 @@ def corrige(origem: str, destino: str, loja: str) -> list[str]:
     if re.sub(r"\D", "", b4) != re.sub(r"\D", "", cnpj):
         dre = substitui_celula(dre, "B4", inline("B4", cnpj, estilo(celula(dre, "B4"))))
         mudancas.append(f"DRE B4: {b4!r} → {cnpj}")
+    # ── 5. receita do BIP360 na linha 101 e Receita Bruta Total como fórmula ──
+    if receita:
+        dre, m_rec = corrigir_receita(dre, receita, ss)
+        mudancas.extend(m_rec)
     partes[p_dre] = dre.encode("utf-8")
 
     # ── 2. Cadastros ────────────────────────────────────────────────────────
@@ -210,7 +299,7 @@ def corrige(origem: str, destino: str, loja: str) -> list[str]:
     return mudancas
 
 
-def verificar(origem: str, destino: str, loja: str) -> None:
+def verificar(origem: str, destino: str, loja: str, receita: dict[int, float] | None = None) -> None:
     """Garante que o arquivo corrigido é o original mais as partes esperadas, e que
     as células-alvo ficaram como devem. Levanta ValueError com o motivo."""
     import openpyxl  # só aqui: a correção em si não depende dele
@@ -221,7 +310,11 @@ def verificar(origem: str, destino: str, loja: str) -> None:
     if [i.filename for i in a.infolist()] != [i.filename for i in b.infolist()]:
         raise ValueError("lista de partes do zip mudou")
     abas = mapa_abas(a)
-    permitidas = {"xl/workbook.xml", abas["DRE 2026"], abas.get("Cadastros") or abas.get("Cadastros Iniciais")}
+    permitidas = {"xl/workbook.xml", abas["DRE 2026"], abas["Saídas"],
+                  abas.get("Cadastros") or abas.get("Cadastros Iniciais")}
+    sobraram = _linhas_2026_sem_formula_mes(b.read(abas["Saídas"]).decode("utf-8"))
+    if sobraram:
+        raise ValueError(f"Saídas: {len(sobraram)} linha(s) de 2026 ainda sem fórmula em Mês Comp. (ex.: B{sobraram[0][0]})")
     alteradas = [i.filename for i, j in zip(a.infolist(), b.infolist()) if i.CRC != j.CRC]
     fora = [p for p in alteradas if p not in permitidas]
     if fora:
@@ -239,6 +332,14 @@ def verificar(origem: str, destino: str, loja: str) -> None:
         v = str(ws[f"{col}59"].value or "")
         if not v.startswith("=SUMIFS") or "#REF" in v:
             raise ValueError(f"{col}59 não é SUMIFS: {v[:60]!r}")
+    for mes, esperado in (receita or {}).items():
+        col = MESES[mes - 1]
+        v7 = ws[f"{col}7"].value
+        if not isinstance(v7, (int, float)) or abs(float(v7) - esperado) > 0.5:
+            raise ValueError(f"{col}7 ≠ receita do BIP360 ({esperado:.2f}): {v7!r}")
+        v18 = str(ws[f"{col}18"].value or "")
+        if not v18.startswith("=SUM("):
+            raise ValueError(f"{col}18 não é =SUM: {v18!r}")
     cad = wb["Cadastros"] if "Cadastros" in wb.sheetnames else wb["Cadastros Iniciais"]
     ok = any(
         r[0] and "DISTRIBUI" in str(r[0]).upper() and "LUCRO" in str(r[0]).upper() and str(r[1]) in ("418", "418.0")

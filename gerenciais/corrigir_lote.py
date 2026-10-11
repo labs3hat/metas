@@ -9,6 +9,9 @@ Variáveis de ambiente:
   GERENCIAIS_PASTA_ID  id da pasta do Drive com as planilhas
   LOJAS                "todas" ou lista "sjp1,ctba3" (padrão: todas)
   SIMULAR              "true" (padrão) só mostra o que mudaria; "false" grava
+  RECEITA_LOJAS        lojas que recebem a receita do BIP360 na linha 101 da DRE
+                       ("" = nenhuma, "todas", ou lista). Lê a planilha de indicadores.
+  RECEITA_MESES        meses a gravar, "1-9" (padrão) ou "7,8,9"
 
 Sai com código 1 se qualquer loja falhar, para o workflow ficar vermelho.
 """
@@ -38,24 +41,45 @@ class Resultado:
     erro: str | None = None
 
 
-def lojas_pedidas() -> set[str] | None:
-    txt = os.environ.get("LOJAS", "todas").strip().lower()
-    if txt in ("", "todas"):
+def _conjunto(var: str, padrao: str) -> set[str] | None:
+    """"" → conjunto vazio; "todas" → None (= todas); lista → conjunto validado."""
+    txt = os.environ.get(var, padrao).strip().lower()
+    if txt == "":
+        return set()
+    if txt == "todas":
         return None
     pedidas = {l.strip() for l in txt.split(",") if l.strip()}
     desconhecidas = pedidas - set(cp.EMPRESAS)
     if desconhecidas:
-        raise SystemExit(f"LOJAS: loja(s) desconhecida(s) {sorted(desconhecidas)}; use {sorted(cp.EMPRESAS)}")
+        raise SystemExit(f"{var}: loja(s) desconhecida(s) {sorted(desconhecidas)}; use {sorted(cp.EMPRESAS)}")
     return pedidas
 
 
-def processar(s, arquivo: dg.ArquivoDrive, loja: str, simular: bool, tmp: Path) -> Resultado:
+def lojas_pedidas() -> set[str] | None:
+    return _conjunto("LOJAS", "todas") or None
+
+
+def receitas_pedidas() -> dict[str, dict[int, float]]:
+    """Receita do BIP360 por loja, para as lojas em RECEITA_LOJAS (vazio = nenhuma)."""
+    import receita_indicadores as ri
+
+    conj = _conjunto("RECEITA_LOJAS", "")
+    lojas = sorted(cp.EMPRESAS) if conj is None else sorted(conj)
+    if not lojas:
+        return {}
+    meses = ri.meses_do_intervalo(os.environ.get("RECEITA_MESES", "1-9"))
+    log.info("Lendo receita do BIP360 (planilha de indicadores) para %s, meses %s", lojas, meses)
+    return ri.ler_receitas(ri.abrir_aba(), lojas, meses)
+
+
+def processar(s, arquivo: dg.ArquivoDrive, loja: str, simular: bool, tmp: Path,
+              receita: dict[int, float] | None) -> Resultado:
     res = Resultado(loja=loja, arquivo=arquivo.nome)
     try:
         origem = dg.baixar(s, arquivo, tmp / f"{loja}.orig.xlsm")
         destino = tmp / f"{loja}.novo.xlsm"
-        res.mudancas = cp.corrige(str(origem), str(destino), loja)
-        cp.verificar(str(origem), str(destino), loja)
+        res.mudancas = cp.corrige(str(origem), str(destino), loja, receita)
+        cp.verificar(str(origem), str(destino), loja, receita)
         for m in res.mudancas:
             log.info("    %s", m)
         if not res.mudancas:
@@ -77,6 +101,7 @@ def main() -> int:
     pedidas = lojas_pedidas()
     log.info("=== Planilhas gerenciais — %s ===", "SIMULAÇÃO" if simular else "GRAVANDO NO DRIVE")
 
+    receitas = receitas_pedidas()
     s = dg.sessao()
     arquivos = dg.listar_planilhas(s, pasta)
     resultados: list[Resultado] = []
@@ -90,7 +115,7 @@ def main() -> int:
             if pedidas is not None and loja not in pedidas:
                 continue
             log.info("--- %s (%s) ---", arq.nome, loja)
-            resultados.append(processar(s, arq, loja, simular, tmp))
+            resultados.append(processar(s, arq, loja, simular, tmp, receitas.get(loja)))
 
     faltando = (pedidas or set(cp.EMPRESAS)) - {r.loja for r in resultados}
     if faltando:
