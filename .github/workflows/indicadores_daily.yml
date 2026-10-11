@@ -6,6 +6,18 @@ on:
     # agendamentos da virada da hora (em out/2026, 5 a 6 horas).
     - cron: "13 5 * * *"
   workflow_dispatch:
+    inputs:
+      recoletar:
+        description: >-
+          Recoleta pontual: "dd/mm/aaaa[:loja,loja];dd/mm/aaaa" (sem loja = todas;
+          lojas: sjp1 ctba3 ctba5 cl2 ctba7 ctba9 ctba11 mga3 mga5 mga7).
+          Só sobrescreve quando a receita nova for maior que a gravada.
+        required: false
+        default: ""
+      reconferir_dias:
+        description: "Dias recentes recoletados mesmo preenchidos (padrão 3)."
+        required: false
+        default: "3"
 
 # Uma execução por vez: o watchdog pode disparar enquanto o agendamento
 # atrasado também começa. A segunda espera a primeira (mesmo usuário no BIP360).
@@ -42,6 +54,10 @@ jobs:
           # secret, fica vazio e o scraper grava só na planilha.
           COLETA_TOKEN: ${{ secrets.COLETA_TOKEN }}
           DEBUG_DIR: debug
+          # Reconferência dos dias recentes e recoleta pontual (ver RECONFERIR_DIAS
+          # e RECOLETAR no scraper). No agendamento, os inputs vêm vazios → padrão.
+          RECONFERIR_DIAS: ${{ inputs.reconferir_dias || '3' }}
+          RECOLETAR: ${{ inputs.recoletar || '' }}
         run: python indicadores_scraper.py
 
       - name: Salvar prints de diagnóstico
