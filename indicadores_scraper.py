@@ -193,30 +193,70 @@ LOJAS = [
     {"key": "mga3",   "bip_name": "MARINGÁ 03 - SHOPPING AVENIDA CENTER MARINGÁ (PR)"},
     {"key": "mga5",   "bip_name": "MARINGÁ 05 - SHOPPING CIDADE MARINGÁ (PR)"},
     {"key": "mga7",   "bip_name": "MARINGÁ 07 - SHOPPING AVENIDA CENTER (PR)"},
+    # Lojas novas: só entram na coleta a partir de "abertura". Sem data, ficam
+    # fora (a linha existe na planilha, mas o robô não procura a loja no BIP360).
+    # O nome no BIP360 ainda não existia quando a loja foi cadastrada aqui; a
+    # seleção casa pelo código ("MARINGÁ 09"), então o sufixo pode diferir.
+    {"key": "mga9",   "bip_name": "MARINGÁ 09 - BONIFÁCIO MALL (PR)", "abertura": "23/10/2026"},
+    {"key": "mga10",  "bip_name": "MARINGÁ 10 - SHOPPING CATUAÍ (PR)", "abertura": None},
 ]
 
+# Loja nova que ainda não aparece no dropdown do BIP360 nesses primeiros dias
+# depois da abertura vira aviso, não falha (o franqueador demora a cadastrar).
+# Fica abaixo de BACKFILL_DAYS de propósito: se passar disso, o workflow fica
+# vermelho enquanto os dias ainda estão dentro da janela de recoleta.
+DIAS_TOLERANCIA_LOJA_NOVA = int(os.environ.get("DIAS_TOLERANCIA_LOJA_NOVA", "5"))
+
+
+def _abertura(store_key: str) -> datetime | None:
+    """Data de abertura da loja (None = loja antiga, sempre ativa)."""
+    for loja in LOJAS:
+        if loja["key"] == store_key:
+            txt = loja.get("abertura", "")
+            if txt == "":
+                return None
+            if txt is None:
+                return datetime(9999, 1, 1, tzinfo=TZ_BR)
+            return datetime.strptime(txt, "%d/%m/%Y").replace(tzinfo=TZ_BR)
+    raise ValueError(f"Loja desconhecida: {store_key}")
+
+
+def _loja_nova_em_tolerancia(store_key: str) -> bool:
+    """Loja aberta há no máximo DIAS_TOLERANCIA_LOJA_NOVA dias."""
+    abertura = _abertura(store_key)
+    return abertura is not None and br_now() - abertura <= timedelta(days=DIAS_TOLERANCIA_LOJA_NOVA)
+
+
+def loja_aberta_em(store_key: str, d: dict) -> bool:
+    """A loja já estava aberta no dia `d` (date_info)?"""
+    abertura = _abertura(store_key)
+    return abertura is None or d["date"].replace(hour=0, minute=0, second=0, microsecond=0) >= abertura
+
 # ── MAPA DE LINHAS NA PLANILHA ────────────────────────────────────────────────
-# Estrutura confirmada lendo a planilha real (maio/2026):
+# Estrutura da planilha desde out/2026 (entrada de MGA 9 e MGA 10 — antes
+# eram 10 lojas e 36 linhas por mês):
 #
-#   Jan/26  cabeçalho=3   SJP1 receita=4   SJP1 TM=15  SJP1 pessoas=26
-#   Fev/26  cabeçalho=39  SJP1 receita=40  SJP1 TM=51  SJP1 pessoas=62
-#   Mar/26  cabeçalho=75  SJP1 receita=76  SJP1 TM=87  SJP1 pessoas=98
-#   Delta entre meses: 36 linhas
+#   Jan/26  cabeçalho=3   SJP1 receita=4   SJP1 TM=17  SJP1 pessoas=30
+#   Fev/26  cabeçalho=45  SJP1 receita=46  SJP1 TM=59  SJP1 pessoas=72
+#   Mar/26  cabeçalho=87  SJP1 receita=88  SJP1 TM=101 SJP1 pessoas=114
+#   Delta entre meses: 42 linhas
 #
 # Ordem das lojas dentro de cada seção (linhas consecutivas):
 #   +0 SJP1 | +1 CTBA3 | +2 CTBA5 | +3 CL2 | +4 CTBA7 | +5 CTBA9
-#   +6 CTBA11 | +7 MGA3 | +8 MGA5 | +9 MGA7 | +10 TOTAL (não escrevemos)
+#   +6 CTBA11 | +7 MGA3 | +8 MGA5 | +9 MGA7 | +10 MGA 9 | +11 MGA 10
+#   +12 TOTAL/MÉDIA (não escrevemos)
 #
 # Coluna C (3, 1-indexed) = dia 1. Dia N = coluna (2 + N).
 
 ROW_BASE_RECEITA = 4   # SJP1 receita em janeiro/2026 (1-indexed)
-ROW_BASE_TM      = 15  # SJP1 ticket médio em janeiro/2026
-ROW_BASE_PA      = 26  # SJP1 pessoas atendidas em janeiro/2026
+ROW_BASE_TM      = 17  # SJP1 ticket médio em janeiro/2026
+ROW_BASE_PA      = 30  # SJP1 pessoas atendidas em janeiro/2026
 
-LINHAS_POR_BLOCO_MES = 36  # delta jan→fev→mar confirmado na planilha
+LINHAS_POR_BLOCO_MES = 42  # delta jan→fev→mar (12 lojas + total, 3 seções, 2 em branco)
 
 # Ordem exata das lojas dentro de cada bloco (0-indexed offset)
-LOJA_ORDER = ["sjp1", "ctba3", "ctba5", "cl2", "ctba7", "ctba9", "ctba11", "mga3", "mga5", "mga7"]
+LOJA_ORDER = ["sjp1", "ctba3", "ctba5", "cl2", "ctba7", "ctba9", "ctba11", "mga3", "mga5", "mga7",
+              "mga9", "mga10"]
 
 # Coluna C (1-indexed = 3) = dia 1 do mês
 COL_DIA_1 = 3  # coluna C
@@ -910,14 +950,13 @@ def _col_for_day(day: int) -> int:
 
 def _row_offset_for_month(month: int, year: int) -> int:
     """
-    Calcula o deslocamento de linha para o bloco do mês correto.
-    Janeiro/2026 = offset 0 (linha base).
-    Fevereiro/2026 = offset 36, Março/2026 = offset 72, etc.
+    Calcula o deslocamento de linha para o bloco do mês dentro da aba do ano.
+    Janeiro = offset 0 (linha base), fevereiro = 42, março = 84, etc.
+    Cada ano tem a sua aba ("Indicadores de Venda <ano>"), que recomeça em
+    janeiro — o ano não entra na conta (antes entrava, e janeiro do ano
+    seguinte cairia 12 blocos abaixo do lugar certo).
     """
-    REFERENCE_MONTH = 1
-    REFERENCE_YEAR  = 2026
-    total_months = (year - REFERENCE_YEAR) * 12 + (month - REFERENCE_MONTH)
-    return total_months * LINHAS_POR_BLOCO_MES
+    return (month - 1) * LINHAS_POR_BLOCO_MES
 
 
 def _loja_row_index(store_key: str) -> int:
@@ -1000,6 +1039,8 @@ def read_missing_combos(
     missing: dict[str, list[dict]] = defaultdict(list)
     for d in dates:
         for key in LOJA_ORDER:
+            if not loja_aberta_em(key, d):
+                continue
             if any(v == "" for v in valores.get((key, d["label"]), ("", "", ""))):
                 missing[key].append(d)
     return dict(missing), valores
@@ -1102,9 +1143,12 @@ def main():
     #     RECOLETAR entram na coleta mesmo preenchidos. Na escrita, só vence o
     #     valor maior (write_all_metrics).
     reconferir: set[tuple[str, str]] = set()
-    pedidos: dict[str, list[dict]] = {key: list(window[:max(0, RECONFERIR_DIAS)]) for key in LOJA_ORDER}
+    pedidos: dict[str, list[dict]] = {
+        key: [d for d in window[:max(0, RECONFERIR_DIAS)] if loja_aberta_em(key, d)]
+        for key in LOJA_ORDER
+    }
     for key, dlist in parse_recoletar(RECOLETAR).items():
-        pedidos[key].extend(dlist)
+        pedidos[key].extend(d for d in dlist if loja_aberta_em(key, d))
     fora_da_janela = [
         d for dlist in pedidos.values() for d in dlist
         if (LOJA_ORDER[0], d["label"]) not in valores_planilha
@@ -1135,6 +1179,7 @@ def main():
             extras = [
                 d for d in window
                 if d["label"] not in ja_pendentes
+                and loja_aberta_em(store["key"], d)
                 and (chave_no_banco(store["key"]), d["label"]) not in presentes
             ][: cliente.backfill_max_por_loja]
             if extras:
@@ -1172,6 +1217,7 @@ def main():
                 log.info("\n--- %s : %s (%d dia(s) pendente(s)) ---",
                          store["key"].upper(), store["bip_name"], len(pending_dates))
 
+                nao_encontrada = False
                 for attempt in (1, 2):
                     if not pending_dates:
                         break
@@ -1203,6 +1249,7 @@ def main():
                         if page:
                             _save_debug(page, f"timeout_{store['key']}")
                     except Exception as exc:
+                        nao_encontrada = str(exc).startswith(("Could not click store", "Could not select store"))
                         log.error("  Erro %s: %s", store["key"], exc)
                         if page:
                             _save_debug(page, f"error_{store['key']}")
@@ -1210,6 +1257,13 @@ def main():
                         if context:
                             context.close()
 
+                if pending_dates and nao_encontrada and _loja_nova_em_tolerancia(store["key"]):
+                    log.warning(
+                        "  [loja nova] %s ainda não aparece no BIP360 (%d dia(s) pendente(s)); "
+                        "aviso só até %d dia(s) após a abertura — depois disso vira falha.",
+                        store["key"], len(pending_dates), DIAS_TOLERANCIA_LOJA_NOVA,
+                    )
+                    pending_dates = []
                 for d in pending_dates:
                     unresolved.append((store["key"], d["label"], "falha na coleta após retry"))
 

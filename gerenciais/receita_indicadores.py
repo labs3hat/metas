@@ -1,10 +1,12 @@
 """Receita mensal de cada loja na planilha de indicadores (a que o scraper do
 BIP360 alimenta): é a fonte da receita que vai para a linha 101 das DREs.
 
-Aba 'Indicadores de Venda 2026': bloco de 36 linhas por mês a partir da linha 4
+Aba 'Indicadores de Venda 2026': bloco de 42 linhas por mês a partir da linha 4
 (SJP 1), coluna AH = ACUM. MÊS. Ordem das lojas no bloco (mesma de
 indicadores_scraper.LOJA_ORDER): sjp1, ctba3, ctba5, cl2, ctba7, ctba9(=mga8),
-ctba11, mga3, mga5, mga7.
+ctba11, mga3, mga5, mga7, mga9, mga10. (Até out/2026 eram 10 lojas e 36
+linhas por mês; a aba inteira foi reorganizada, então o passo vale para
+todos os meses.)
 """
 from __future__ import annotations
 
@@ -20,10 +22,10 @@ log = logging.getLogger("gerenciais.receita")
 SHEET_ID = "1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY"
 ABA = "Indicadores de Venda 2026"
 LINHA_BASE = 4
-LINHAS_POR_MES = 36
+LINHAS_POR_MES = 42
 COLUNA_ACUMULADO = "AH"
 POSICAO = {"sjp1": 0, "ctba3": 1, "ctba5": 2, "cl2": 3, "ctba7": 4, "mga8": 5,
-           "ctba11": 6, "mga3": 7, "mga5": 8, "mga7": 9}
+           "ctba11": 6, "mga3": 7, "mga5": 8, "mga7": 9, "mga9": 10, "mga10": 11}
 
 
 def meses_do_intervalo(txt: str) -> list[int]:
