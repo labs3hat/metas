@@ -231,6 +231,46 @@ def corrigir_valores_texto(xml: str, ss: list[str]) -> tuple[str, list[str]]:
     return xml, mudancas
 
 
+# ── Ajustes pontuais aprovados (célula a célula) ─────────────────────────────
+# Só aplica se a linha ainda tiver o texto e a data esperados; já corrigida, pula; diferente, avisa.
+AJUSTES_DATA_COMP: dict[str, list[dict]] = {
+    "ctba5": [
+        # André, 12/10/2026 (tracker item 54): comissão de out/2025 lançada com data de 2026.
+        {"linha": 7484, "texto": "Reembolso comissão Rose 10/2025", "de": 46326, "para": 45961},
+    ],
+}
+
+
+def corrigir_datas_pontuais(xml: str, ss: list[str], loja: str) -> tuple[str, list[str]]:
+    mudancas: list[str] = []
+    for a in AJUSTES_DATA_COMP.get(loja, []):
+        n = a["linha"]
+        desc = valor(celula(xml, f"H{n}"), ss) or ""
+        atual = valor(celula(xml, f"A{n}"), ss)
+        try:
+            serial = int(float(atual)) if atual is not None else None
+        except ValueError:
+            serial = None
+        if a["texto"] not in desc:
+            mudancas.append(f"ATENÇÃO Saídas A{n}: descrição {desc[:50]!r} não é a esperada; não mexi")
+            continue
+        if serial == a["para"]:
+            continue
+        if serial != a["de"]:
+            mudancas.append(f"ATENÇÃO Saídas A{n}: data {atual!r} diferente da esperada; não mexi")
+            continue
+        ref = f"A{n}"
+        xml = substitui_celula(xml, ref, f'<c r="{ref}"{estilo(celula(xml, ref))}><v>{a["para"]}</v></c>')
+        b = celula(xml, f"B{n}")
+        if b and "<f" in (b.group("inner") or ""):
+            novo_b = re.sub(r"<v>.*?</v>", f"<v>{_mes_ano_do_serial(a['para'])}</v>", b.group(0), flags=re.S)
+            xml = xml[: b.start()] + novo_b + xml[b.end():]
+        mudancas.append(
+            f"Saídas {ref}: Data Comp. {_mes_ano_do_serial(a['de'])} → {_mes_ano_do_serial(a['para'])} ({a['texto']})"
+        )
+    return xml, mudancas
+
+
 def corrigir_receita(dre: str, receita: dict[int, float], ss: list[str]) -> tuple[str, list[str]]:
     """Linha 101 (receita de vendas, linha 7) recebe a receita do BIP360 mês a mês e a
     linha 18 (Receita Bruta Total) volta a ser =SUM(col7:col16) onde estiver digitada."""
@@ -273,6 +313,8 @@ def corrige(origem: str, destino: str, loja: str, receita: dict[int, float] | No
     saidas, m_saidas = corrigir_mes_comp(saidas)
     saidas, m_valores = corrigir_valores_texto(saidas, ss)
     m_saidas += m_valores
+    saidas, m_datas = corrigir_datas_pontuais(saidas, ss, loja)
+    m_saidas += m_datas
     if any(not m.startswith("ATENÇÃO") for m in m_saidas):
         mudancas.extend(m_saidas)
         partes[p_saidas] = saidas.encode("utf-8")
@@ -376,6 +418,13 @@ def verificar(origem: str, destino: str, loja: str, receita: dict[int, float] | 
     texto = [(n, t) for n, t, num in _valores_texto_2026(b.read(abas["Saídas"]).decode("utf-8"), shared_strings(b)) if num is not None]
     if texto:
         raise ValueError(f"Saídas: {len(texto)} valor(es) de 2026 ainda em texto (ex.: I{texto[0][0]} = {texto[0][1]!r})")
+    saidas_b = b.read(abas["Saídas"]).decode("utf-8")
+    ss_b = shared_strings(b)
+    for aj in AJUSTES_DATA_COMP.get(loja, []):
+        if aj["texto"] in (valor(celula(saidas_b, f"H{aj['linha']}"), ss_b) or ""):
+            v = valor(celula(saidas_b, f"A{aj['linha']}"), ss_b)
+            if v is None or int(float(v)) != aj["para"]:
+                raise ValueError(f"Saídas A{aj['linha']}: Data Comp. não ficou {aj['para']} ({v!r})")
     alteradas = [i.filename for i, j in zip(a.infolist(), b.infolist()) if i.CRC != j.CRC]
     fora = [p for p in alteradas if p not in permitidas]
     if fora:
