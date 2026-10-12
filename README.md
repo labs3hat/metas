@@ -52,6 +52,17 @@ ID: `1qU8Ny_OqoF4VrI0IU4JuuRvoNnmBOMSf9JkFs1h4PRY`
 | MGA 5 | Loja Shopping Cidade — Maringá |
 | MGA 7 | Quiosque Avenida Center — Maringá |
 | MGA 8 | Quiosque Havan — Maringá |
+| MGA 9 | Loja Bonifácio Mall — Maringá (abre 23/10/2026) |
+| MGA 10 | Loja Shopping Catuaí — Maringá (abertura prevista fim nov/início dez 2026) |
+
+Loja nova entra nos dois scrapers com a data de `abertura` (campo em `LOJAS`):
+antes dela o robô não procura a loja no BIP360; sem data, fica fora. Nos
+primeiros 5 dias depois da abertura, loja que ainda não aparece no dropdown
+do BIP360 vira aviso, não falha (`DIAS_TOLERANCIA_LOJA_NOVA`).
+
+Desde out/2026 a aba "Indicadores de Venda 2026" tem 12 lojas por seção e
+**42 linhas por mês** (eram 36). Quem lê por posição: `indicadores_scraper.py`
+(`LINHAS_POR_BLOCO_MES`, `ROW_BASE_*`) e `gerenciais/receita_indicadores.py`.
 
 ## Escrita dupla no banco do sistema novo (desde 24/09/2026)
 

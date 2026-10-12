@@ -282,7 +282,35 @@ LOJAS = [
     {"bip_name": "MARINGÁ 07 - SHOPPING AVENIDA CENTER (PR)",         "key": "mga7"},
     {"bip_name": "MARINGÁ 08 - HAVAN (PR)",                           "key": "mga8"},
     {"bip_name": "SÃO JOSÉ DOS PINHAIS 01 - SHOPPING SÃO JOSÉ (PR)",  "key": "sjp1"},
+    # Lojas novas: entram a partir de "abertura" (None = ainda sem data, fica
+    # fora). Mesma regra de indicadores_scraper.py.
+    {"bip_name": "MARINGÁ 09 - BONIFÁCIO MALL (PR)",                  "key": "mga9",  "abertura": "23/10/2026"},
+    {"bip_name": "MARINGÁ 10 - SHOPPING CATUAÍ (PR)",                 "key": "mga10", "abertura": None},
 ]
+
+# Loja nova que ainda não aparece no dropdown do BIP360 nos primeiros dias
+# depois da abertura vira aviso, não falha (o franqueador demora a cadastrar).
+DIAS_TOLERANCIA_LOJA_NOVA = int(os.environ.get("DIAS_TOLERANCIA_LOJA_NOVA", "5"))
+
+
+def abertura_da_loja(store: dict) -> datetime | None:
+    """None = loja antiga (sempre ativa). Sem data = ainda não abriu."""
+    if "abertura" not in store:
+        return None
+    if not store["abertura"]:
+        return datetime(9999, 1, 1, tzinfo=TZ_BR)
+    return datetime.strptime(store["abertura"], "%d/%m/%Y").replace(tzinfo=TZ_BR)
+
+
+def loja_aberta_em(store: dict, data_br: str) -> bool:
+    """A loja já estava aberta na data 'dd/mm/aaaa'?"""
+    abertura = abertura_da_loja(store)
+    return abertura is None or datetime.strptime(data_br, "%d/%m/%Y").replace(tzinfo=TZ_BR) >= abertura
+
+
+def loja_nova_em_tolerancia(store: dict) -> bool:
+    abertura = abertura_da_loja(store)
+    return abertura is not None and br_now() - abertura <= timedelta(days=DIAS_TOLERANCIA_LOJA_NOVA)
 
 MESES_PT = {
     1: "jan", 2: "fev", 3: "mar", 4: "abr", 5: "mai", 6: "jun",
@@ -300,6 +328,8 @@ STORE_SHEET_ROW = {
     "mga5": 31,
     "mga7": 35,
     "mga8": 39,
+    "mga9": 43,
+    "mga10": 47,
 }
 
 # Aba "Metas TM suporte"
@@ -317,6 +347,8 @@ TM_STORE_SHEET_ROW = {
     "mga5": 10,
     "mga7": 11,
     "mga8": 12,
+    "mga9": 13,
+    "mga10": 14,
 }
 
 
@@ -2483,7 +2515,12 @@ def main():
             browser = pw.chromium.launch(headless=True)
 
             for store in LOJAS:
+                _, _, fim_relatorio = get_report_period()
+                if not loja_aberta_em(store, fim_relatorio.strftime("%d/%m/%Y")):
+                    print(f"\n--- {store['key'].upper()} : ainda não abriu; fora da coleta ---")
+                    continue
                 print(f"\n--- {store['key'].upper()} : {store['bip_name']} ---")
+                dias_da_loja = [d for d in hist_days if loja_aberta_em(store, d)]
 
                 store_done = False
                 last_error = None
@@ -2504,7 +2541,7 @@ def main():
 
                         hist_pending = process_store(
                             page, store, tmpdir, ws_gsheet, ws_op, ws_tm,
-                            hist_days, hist_data_rows, existing_hist_dates,
+                            dias_da_loja, hist_data_rows, existing_hist_dates,
                             cliente, presentes_banco, presentes_atendimentos,
                             presentes_operadores,
                         )
@@ -2529,7 +2566,11 @@ def main():
                     if store_done:
                         break
 
-                if not store_done:
+                if (not store_done and str(last_error or "").startswith(("Could not click store", "Could not select store"))
+                        and loja_nova_em_tolerancia(store)):
+                    print(f"  ⚠️ [loja nova] {store['key']} ainda não aparece no BIP360; "
+                          f"aviso só até {DIAS_TOLERANCIA_LOJA_NOVA} dia(s) após a abertura.")
+                elif not store_done:
                     failed_stores.append((store["key"], last_error))
 
             browser.close()
