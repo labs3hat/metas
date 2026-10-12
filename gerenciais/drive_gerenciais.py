@@ -28,6 +28,7 @@ API = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3"
 TIMEOUT = 120
 MIME_XLSM = "application/vnd.ms-excel.sheet.macroenabled.12"
+MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,21 @@ def listar_planilhas(s: AuthorizedSession, pasta_id: str) -> list[ArquivoDrive]:
     return sorted(out, key=lambda a: a.nome)
 
 
+def buscar_por_nome(s: AuthorizedSession, pasta_id: str, nome: str) -> ArquivoDrive:
+    """O arquivo com esse nome exato direto na pasta. Erro se não houver exatamente um."""
+    q = f"'{pasta_id}' in parents and trashed = false and name = '{nome.replace(chr(39), chr(92) + chr(39))}'"
+    r = s.get(f"{API}/files", params={
+        "q": q, "fields": "files(id, name, size, modifiedTime, headRevisionId, mimeType)",
+        "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}, timeout=TIMEOUT)
+    _erro(r, f"buscar {nome!r}")
+    achados = r.json().get("files", [])
+    if len(achados) != 1:
+        raise RuntimeError(f"esperava 1 arquivo chamado {nome!r} na pasta, achei {len(achados)}")
+    f = achados[0]
+    return ArquivoDrive(id=f["id"], nome=f["name"], tamanho=int(f.get("size", 0)),
+                        modificado_em=f.get("modifiedTime", ""), revisao_atual=f.get("headRevisionId"))
+
+
 def baixar(s: AuthorizedSession, arquivo: ArquivoDrive, destino: Path) -> Path:
     r = s.get(f"{API}/files/{arquivo.id}", params={"alt": "media", "supportsAllDrives": "true"},
               timeout=TIMEOUT)
@@ -112,7 +128,7 @@ def preservar_revisao_atual(s: AuthorizedSession, arquivo: ArquivoDrive) -> None
     log.info("  revisão anterior de %s preservada (%s)", arquivo.nome, arquivo.revisao_atual)
 
 
-def subir_nova_versao(s: AuthorizedSession, arquivo: ArquivoDrive, caminho: Path) -> str:
+def subir_nova_versao(s: AuthorizedSession, arquivo: ArquivoDrive, caminho: Path, mime: str = MIME_XLSM) -> str:
     """Envia `caminho` como nova revisão do mesmo arquivo. Devolve o novo headRevisionId."""
     preservar_revisao_atual(s, arquivo)
     dados = caminho.read_bytes()
@@ -120,7 +136,7 @@ def subir_nova_versao(s: AuthorizedSession, arquivo: ArquivoDrive, caminho: Path
         f"{UPLOAD}/files/{arquivo.id}",
         params={"uploadType": "media", "supportsAllDrives": "true",
                 "fields": "id, headRevisionId, modifiedTime, size"},
-        data=dados, headers={"Content-Type": MIME_XLSM}, timeout=TIMEOUT * 3,
+        data=dados, headers={"Content-Type": mime}, timeout=TIMEOUT * 3,
     )
     _erro(r, f"subir nova versão de {arquivo.nome}")
     meta = r.json()
