@@ -137,6 +137,18 @@ def _mes_ano_do_serial(serial: int) -> str:
     return f"{d.month}/{d.year}"
 
 
+def _linhas_2026(xml: str) -> list[tuple[int, int]]:
+    """(linha, serial da Data Comp.) de todas as linhas da aba Saídas com Data Comp. em 2026."""
+    out: list[tuple[int, int]] = []
+    for rm in re.finditer(r'<row r="(\d+)"[^>]*>(.*?)</row>', xml, re.S):
+        n = int(rm.group(1))
+        a = re.search(rf'<c r="A{n}"[^>]*?(?:/>|>(.*?)</c>)', rm.group(2), re.S)
+        v = re.search(r"<v>([\d.]+)</v>", a.group(1)) if a and a.group(1) else None
+        if v and SERIAL_2026_INI <= int(float(v.group(1))) <= SERIAL_2026_FIM:
+            out.append((n, int(float(v.group(1)))))
+    return out
+
+
 def _linhas_2026_sem_formula_mes(xml: str) -> list[tuple[int, int]]:
     """(linha, serial da Data Comp.) das linhas de 2026 cuja coluna B não é fórmula."""
     out: list[tuple[int, int]] = []
@@ -172,6 +184,50 @@ def corrigir_mes_comp(xml: str) -> tuple[str, list[str]]:
         novo = f'<c r="{ref}"{estilo(atual)} t="str"><f>{formula}</f><v>{_mes_ano_do_serial(serial)}</v></c>'
         xml = substitui_celula(xml, ref, novo)
         mudancas.append(f"Saídas {ref}: texto → fórmula de Mês Comp. ({_mes_ano_do_serial(serial)})")
+    return xml, mudancas
+
+
+_MOEDA_BR = re.compile(r"^-?(\d{1,3}(\.\d{3})+|\d+)(,\d{1,2})?$")
+
+
+def _numero_de_texto_br(texto: str) -> float | None:
+    """'\xa04.853,20' / 'R$ 201,00' / 'R 392,27' → float. None se não for valor em reais sem ambiguidade."""
+    t = re.sub(r"[\s\xa0]", "", texto)
+    t = re.sub(r"^R\$?", "", t)
+    if not _MOEDA_BR.match(t):
+        return None
+    return float(t.replace(".", "").replace(",", "."))
+
+
+COL_VALOR_SAIDAS = "I"  # Data Comp., Mês Comp., Natureza, Cod DRE, FLCX, Mens., Fornecedor, Descrição, Valor
+
+
+def _valores_texto_2026(xml: str, ss: list[str]) -> list[tuple[int, str, float | None]]:
+    """(linha, texto, número) das linhas de 2026 da aba Saídas cujo Valor está digitado como texto.
+    O SUMIFS da DRE ignora texto, então esses lançamentos somem do resultado sem aviso."""
+    out: list[tuple[int, str, float | None]] = []
+    for n, _serial in _linhas_2026(xml):
+        m = celula(xml, f"{COL_VALOR_SAIDAS}{n}")
+        if not m or not re.search(r't="(s|inlineStr|str)"', m.group("attrs")):
+            continue
+        v = valor(m, ss)
+        if v is None or v.startswith("=") or not re.search(r"\d", v):
+            continue
+        out.append((n, v, _numero_de_texto_br(v)))
+    return out
+
+
+def corrigir_valores_texto(xml: str, ss: list[str]) -> tuple[str, list[str]]:
+    """Valor digitado como texto vira número (mesmo valor, mesmo estilo). Texto que não é
+    valor em reais sem ambiguidade fica como está e sai como ATENÇÃO no relatório."""
+    mudancas: list[str] = []
+    for n, texto, numero in _valores_texto_2026(xml, ss):
+        ref = f"{COL_VALOR_SAIDAS}{n}"
+        if numero is None:
+            mudancas.append(f"ATENÇÃO Saídas {ref}: valor em texto {texto!r} não reconhecido (não mexi)")
+            continue
+        xml = substitui_celula(xml, ref, f'<c r="{ref}"{estilo(celula(xml, ref))}><v>{numero:.2f}</v></c>')
+        mudancas.append(f"Saídas {ref}: valor em texto {texto!r} → {numero:.2f}")
     return xml, mudancas
 
 
@@ -215,7 +271,9 @@ def corrige(origem: str, destino: str, loja: str, receita: dict[int, float] | No
     p_saidas = abas["Saídas"]
     saidas = z.read(p_saidas).decode("utf-8")
     saidas, m_saidas = corrigir_mes_comp(saidas)
-    if m_saidas:
+    saidas, m_valores = corrigir_valores_texto(saidas, ss)
+    m_saidas += m_valores
+    if any(not m.startswith("ATENÇÃO") for m in m_saidas):
         mudancas.extend(m_saidas)
         partes[p_saidas] = saidas.encode("utf-8")
 
@@ -315,6 +373,9 @@ def verificar(origem: str, destino: str, loja: str, receita: dict[int, float] | 
     sobraram = _linhas_2026_sem_formula_mes(b.read(abas["Saídas"]).decode("utf-8"))
     if sobraram:
         raise ValueError(f"Saídas: {len(sobraram)} linha(s) de 2026 ainda sem fórmula em Mês Comp. (ex.: B{sobraram[0][0]})")
+    texto = [(n, t) for n, t, num in _valores_texto_2026(b.read(abas["Saídas"]).decode("utf-8"), shared_strings(b)) if num is not None]
+    if texto:
+        raise ValueError(f"Saídas: {len(texto)} valor(es) de 2026 ainda em texto (ex.: I{texto[0][0]} = {texto[0][1]!r})")
     alteradas = [i.filename for i, j in zip(a.infolist(), b.infolist()) if i.CRC != j.CRC]
     fora = [p for p in alteradas if p not in permitidas]
     if fora:
