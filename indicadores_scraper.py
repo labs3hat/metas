@@ -862,24 +862,17 @@ SEM_MOVIMENTO: set[tuple[str, str]] = set()
 
 
 def _relatorio_sem_registro(page) -> bool:
-    """True se a pesquisa voltou vazia ("Nenhum registro"). Só é chamada quando o
-    botão XLS não apareceu: as duas coisas juntas é que indicam dia sem movimento."""
+    """True se a pesquisa voltou vazia. Só é chamada quando o botão XLS não
+    apareceu: as duas coisas juntas é que indicam dia sem movimento.
+
+    Na tela vazia o BIP360 mostra a linha de Totais zerada e o texto
+    "Nenhum Registro Encontrado." (com maiúsculas — visto no log de 10/11/2026).
+    """
     try:
         body = page.locator("body").inner_text(timeout=5000)
     except Exception:
         return False
-    vazio = "Nenhum registro" in body
-    log.info("  Relatório sem XLS: 'Nenhum registro'=%s, 'Totais'=%s", vazio, "Totais" in body)
-    # Diagnóstico (10/11/2026): o que a tabela do relatório mostra quando não há XLS.
-    try:
-        tabelas = page.evaluate("""() => Array.from(document.querySelectorAll('table, .ui-datatable'))
-            .map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim())
-            .filter(t => t.includes('Totais') || t.includes('Ticket'))
-            .map(t => t.slice(0, 400))""")
-        log.info("  Relatório sem XLS, tabelas: %s", tabelas[:3])
-    except Exception as exc:
-        log.info("  Relatório sem XLS, tabelas: não foi possível ler (%s)", exc)
-    return vazio
+    return "nenhum registro" in body.lower()
 
 
 def collect_store_days(
