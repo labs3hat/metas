@@ -862,12 +862,15 @@ SEM_MOVIMENTO: set[tuple[str, str]] = set()
 
 
 def _relatorio_sem_registro(page) -> bool:
-    """True se a pesquisa voltou vazia: "Nenhum registro" e nenhuma linha de Totais."""
+    """True se a pesquisa voltou vazia ("Nenhum registro"). Só é chamada quando o
+    botão XLS não apareceu: as duas coisas juntas é que indicam dia sem movimento."""
     try:
         body = page.locator("body").inner_text(timeout=5000)
     except Exception:
         return False
-    return "Nenhum registro" in body and "Totais" not in body
+    vazio = "Nenhum registro" in body
+    log.info("  Relatório sem XLS: 'Nenhum registro'=%s, 'Totais'=%s", vazio, "Totais" in body)
+    return vazio
 
 
 def collect_store_days(
