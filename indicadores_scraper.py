@@ -853,6 +853,23 @@ def _remove_accents(text: str) -> str:
 
 
 # ── COLETA POR LOJA ───────────────────────────────────────────────────────────
+# Combinações (loja, dia) em que o BIP360 respondeu "Nenhum registro": loja
+# fechada (feriado, por exemplo). O relatório vazio não oferece o botão XLS, e
+# isso era contado como falha de coleta — o workflow ficava vermelho pelos 7
+# dias da janela depois de cada feriado (Finados, 02/11/2026) e escondia falha
+# de verdade. O main() decide o que fazer com elas.
+SEM_MOVIMENTO: set[tuple[str, str]] = set()
+
+
+def _relatorio_sem_registro(page) -> bool:
+    """True se a pesquisa voltou vazia: "Nenhum registro" e nenhuma linha de Totais."""
+    try:
+        body = page.locator("body").inner_text(timeout=5000)
+    except Exception:
+        return False
+    return "Nenhum registro" in body and "Totais" not in body
+
+
 def collect_store_days(
     page, store: dict, tmpdir: str, dates: list[dict]
 ) -> tuple[list[StoreMetrics], list[dict]]:
@@ -891,6 +908,8 @@ def collect_store_days(
                 download = _click_xls(page)
             except Exception:
                 _save_debug(page, f"xls_not_found_{key}_{d['year']}{d['month']:02d}{d['day']:02d}")
+                if _relatorio_sem_registro(page):
+                    SEM_MOVIMENTO.add((key, d["label"]))
                 raise
 
             file_path = os.path.join(
@@ -1265,6 +1284,16 @@ def main():
                     )
                     pending_dates = []
                 for d in pending_dates:
+                    # Dia sem registro no BIP360 não é falha — exceto ontem (D-1):
+                    # ali pode ser só o BIP360 ainda sem consolidar, então segue
+                    # como pendência para o watchdog tentar de novo no mesmo dia.
+                    if (store["key"], d["label"]) in SEM_MOVIMENTO and d["label"] != window[0]["label"]:
+                        log.warning(
+                            "  [sem movimento] %s %s: o BIP360 não tem registro nesse dia "
+                            "(loja fechada?) — a célula fica vazia e não conta como falha.",
+                            store["key"], d["label"],
+                        )
+                        continue
                     unresolved.append((store["key"], d["label"], "falha na coleta após retry"))
 
             browser.close()
