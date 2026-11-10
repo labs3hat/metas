@@ -870,6 +870,15 @@ def _relatorio_sem_registro(page) -> bool:
         return False
     vazio = "Nenhum registro" in body
     log.info("  Relatório sem XLS: 'Nenhum registro'=%s, 'Totais'=%s", vazio, "Totais" in body)
+    # Diagnóstico (10/11/2026): o que a tabela do relatório mostra quando não há XLS.
+    try:
+        tabelas = page.evaluate("""() => Array.from(document.querySelectorAll('table, .ui-datatable'))
+            .map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim())
+            .filter(t => t.includes('Totais') || t.includes('Ticket'))
+            .map(t => t.slice(0, 400))""")
+        log.info("  Relatório sem XLS, tabelas: %s", tabelas[:3])
+    except Exception as exc:
+        log.info("  Relatório sem XLS, tabelas: não foi possível ler (%s)", exc)
     return vazio
 
 
