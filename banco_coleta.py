@@ -202,6 +202,25 @@ class ClienteColeta:
             log.info("  [banco] operadores %s %s: %d operador(es)", loja, data_br, len(operadores))
         return resposta is not None
 
+    def enviar_lactea(self, loja: str, data_br: str, itens: list, sem_registros: bool) -> bool:
+        """APTE de bebida láctea de UM dia de UMA loja (Saída de Composição,
+        lactea_scraper.py). `itens`: SaborDoDia de lactea.py. Só acompanhamento:
+        não entra na premiação. Recoletar o dia substitui o dia."""
+        resposta = self._enviar({
+            "acao": "lactea",
+            "loja": chave_no_banco(loja),
+            "data": data_iso(data_br),
+            "sem_registros": bool(sem_registros),
+            "itens": [
+                {"sabor": i.sabor, "litros": round(float(i.litros), 4),
+                 "unidade": i.unidade, "linhas": i.linhas}
+                for i in itens
+            ],
+        })
+        if resposta is not None:
+            log.info("  [banco] bebida láctea %s %s gravada", loja, data_br)
+        return resposta is not None
+
     def dias_presentes(self, tipo: str, datas_br: list[str]) -> set[tuple[str, str]] | None:
         """(loja NA CHAVE DO BANCO, 'DD/MM/AAAA') já gravados no banco — compare
         com chave_no_banco(sua_chave). None se não deu para perguntar: aí
