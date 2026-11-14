@@ -2,7 +2,7 @@
 
 import unittest
 
-from lactea import RelatorioInvalido, ler_linhas, somar_por_sabor
+from lactea import RelatorioInvalido, codigo_da_franquia, ler_linhas, somar_por_sabor
 
 CAB = ["Descrição", "Unidade de Medida", "Tipo de Saída", "Qtd. Venda"]
 
@@ -72,6 +72,13 @@ class TestLactea(unittest.TestCase):
         f = Folha([CAB, ["Bebida Láctea Uht Morango", "LT", "Venda", 3]])
         with self.assertRaises(RelatorioInvalido):
             somar_por_sabor(ler_linhas(f))
+
+    def test_codigo_da_franquia_ignora_o_nome_do_shopping(self):
+        self.assertEqual(codigo_da_franquia("MARINGÁ 09 - BONIFÁCIO MALL (PR)"), "MARINGA 09")
+        self.assertEqual(codigo_da_franquia("Maringá 09 (PR)"), "MARINGA 09")
+        self.assertEqual(codigo_da_franquia("CURITIBA 07 (PR)"), "CURITIBA 07")
+        self.assertNotEqual(codigo_da_franquia("Maringá 07 - Shopping Avenida Center (PR)"),
+                            codigo_da_franquia("MARINGÁ 03 - SHOPPING AVENIDA CENTER MARINGÁ (PR)"))
 
 
 if __name__ == "__main__":

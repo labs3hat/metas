@@ -70,6 +70,17 @@ def numero(valor: object, onde: str) -> float:
         raise RelatorioInvalido(f"{onde}: quantidade não numérica {valor!r}.") from erro
 
 
+def codigo_da_franquia(nome: str) -> str:
+    """'MARINGÁ 09 - BONIFÁCIO MALL (PR)' e 'Maringá 09 (PR)' → 'MARINGA 09'.
+
+    O BIP360 não usa o mesmo nome em todo lugar: na troca de loja a franquia
+    vem com o shopping; no filtro Franquia da Saída de Composição, às vezes só
+    com cidade e número (Bonifácio, 14/11/2026). Cidade + número identificam a
+    unidade sem ambiguidade."""
+    base = normalizar(nome).split(" - ")[0]
+    return re.sub(r"\s*\([A-Z]{2}\)$", "", base).strip()
+
+
 def ler_linhas(folha) -> list[Linha]:
     """Lê a planilha exportada. `folha` tem .nrows, .ncols e .cell_value(r, c)
     (o contrato de scraper.open_workbook_smart)."""
