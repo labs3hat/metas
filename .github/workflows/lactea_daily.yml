@@ -1,0 +1,85 @@
+name: BIP360 Bebida Láctea (APTE diário)
+
+# APTE de bebida láctea por loja (Saída de Composição) para o indicador diário
+# de desperdício no Metas — só acompanhamento (lactea_scraper.py).
+
+on:
+  schedule:
+    # 04:23 BRT = 07:23 UTC, depois da coleta das metas (03:07). Minuto
+    # quebrado de propósito: o GitHub atrasa os agendamentos da virada da hora.
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      de:
+        description: "Data inicial dd/mm/aaaa (vazio = ontem)"
+        required: false
+        default: ""
+      ate:
+        description: "Data final dd/mm/aaaa (vazio = igual à inicial)"
+        required: false
+        default: ""
+      janela:
+        description: "Validação: soma o período por loja e só imprime (não grava)"
+        type: boolean
+        default: false
+      lojas:
+        description: "Chaves separadas por vírgula (vazio = todas)"
+        required: false
+        default: ""
+
+# Mesma fila da coleta das metas: o mesmo usuário no BIP360 não pode ter duas
+# sessões trocando de loja ao mesmo tempo.
+concurrency:
+  group: bip360-daily
+  cancel-in-progress: false
+
+jobs:
+  lactea:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Testes da leitura
+        run: python -m unittest test_lactea -v
+
+      - name: Coletar bebida láctea
+        env:
+          BIP_USER: ${{ secrets.BIP_USER }}
+          BIP_PASS: ${{ secrets.BIP_PASS }}
+          # scraper.py (de onde vêm o login e a troca de loja) lê no import.
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          COLETA_TOKEN: ${{ secrets.COLETA_TOKEN }}
+          DEBUG_DIR: debug
+          IN_DE: ${{ inputs.de }}
+          IN_ATE: ${{ inputs.ate }}
+          IN_JANELA: ${{ inputs.janela }}
+          IN_LOJAS: ${{ inputs.lojas }}
+        run: |
+          args=()
+          [ -n "$IN_DE" ] && args+=(--de "$IN_DE")
+          [ -n "$IN_ATE" ] && args+=(--ate "$IN_ATE")
+          [ "$IN_JANELA" = "true" ] && args+=(--janela)
+          [ -n "$IN_LOJAS" ] && args+=(--lojas "$IN_LOJAS")
+          python lactea_scraper.py "${args[@]}"
+
+      - name: Salvar prints de diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lactea-debug
+          path: debug/
+          if-no-files-found: ignore
