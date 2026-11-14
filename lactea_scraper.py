@@ -39,7 +39,7 @@ from playwright.sync_api import sync_playwright
 
 import scraper as s
 from banco_coleta import ClienteColeta
-from lactea import RelatorioInvalido, ler_linhas, normalizar, somar_por_sabor
+from lactea import RelatorioInvalido, codigo_da_franquia, ler_linhas, somar_por_sabor
 
 log = logging.getLogger("lactea")
 
@@ -113,7 +113,7 @@ def conferir_filtros(page, alvo: str) -> str:
     )
     if lido["produtos"]:
         raise FalhaLoja(f"o filtro Produto tem {lido['produtos']} marcado(s) — o relatório sairia parcial")
-    if len(lido["marcadas"]) != 1 or normalizar(lido["marcadas"][0]) != normalizar(alvo):
+    if len(lido["marcadas"]) != 1 or codigo_da_franquia(lido["marcadas"][0]) != codigo_da_franquia(alvo):
         raise FalhaLoja(f"o filtro Franquia marca {lido['marcadas'] or 'nenhuma'}, esperado só {alvo!r}")
     return lido["marcadas"][0]
 
