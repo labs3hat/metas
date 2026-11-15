@@ -8,6 +8,13 @@ on:
     # 04:23 BRT = 07:23 UTC, depois da coleta das metas (03:07). Minuto
     # quebrado de propósito: o GitHub atrasa os agendamentos da virada da hora.
     - cron: "23 7 * * *"
+  # E logo depois da coleta das metas, que também sofre o atraso: em 15/11/2026
+  # o agendamento das 04:23 não tinha rodado até as 11:50, e o Metas ficou sem
+  # a venda de 14/11. A coleta é idempotente (upsert por loja, dia e sabor):
+  # rodar duas vezes no mesmo dia não duplica nada.
+  workflow_run:
+    workflows: ["BIP360 Daily Scraper"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       de:

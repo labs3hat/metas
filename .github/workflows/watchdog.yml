@@ -1,7 +1,7 @@
 name: Watchdog — Re-run on Failure
 
-# Confere os DOIS coletores (Indicadores e Daily) a cada execução e dispara de
-# novo quem não terminou com sucesso hoje. Duas execuções por dia, em minutos
+# Confere os TRÊS coletores (Indicadores, Daily e Bebida Láctea) a cada execução
+# e dispara de novo quem não terminou com sucesso hoje. Duas execuções por dia, em minutos
 # quebrados, para ter uma segunda chance.
 #
 # Até 04/10/2026 o watchdog deduzia pela hora UTC qual coletor conferir ("08"
@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Workflow a verificar manualmente (daily, indicadores ou ambos)"
+        description: "Workflow a verificar manualmente (daily, indicadores, lactea ou ambos = todos)"
         required: true
         default: "ambos"
         type: choice
@@ -30,6 +30,7 @@ on:
           - ambos
           - daily
           - indicadores
+          - lactea
 
 jobs:
   watchdog:
@@ -50,13 +51,15 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$MANUAL_TARGET" != "ambos" ]; then
             TARGETS="$MANUAL_TARGET"
           else
-            TARGETS="indicadores daily"
+            TARGETS="indicadores daily lactea"
           fi
 
           FALHAS=0
           for TARGET in $TARGETS; do
             if [ "$TARGET" = "indicadores" ]; then
               FILENAME=indicadores_daily.yml; LABEL="BIP360 Indicadores Diários"
+            elif [ "$TARGET" = "lactea" ]; then
+              FILENAME=lactea_daily.yml; LABEL="BIP360 Bebida Láctea (APTE diário)"
             else
               FILENAME=daily.yml; LABEL="BIP360 Daily Scraper"
             fi
