@@ -4,14 +4,11 @@ name: BIP360 Bebida Láctea (APTE diário)
 # de desperdício no Metas — só acompanhamento (lactea_scraper.py).
 
 on:
-  schedule:
-    # 04:23 BRT = 07:23 UTC, depois da coleta das metas (03:07). Minuto
-    # quebrado de propósito: o GitHub atrasa os agendamentos da virada da hora.
-    - cron: "23 7 * * *"
-  # E logo depois da coleta das metas, que também sofre o atraso: em 15/11/2026
-  # o agendamento das 04:23 não tinha rodado até as 11:50, e o Metas ficou sem
-  # a venda de 14/11. A coleta é idempotente (upsert por loja, dia e sabor):
-  # rodar duas vezes no mesmo dia não duplica nada.
+  # Logo depois da coleta das metas. Até 17/11/2026 também havia um agendamento
+  # próprio às 04:23, mas o GitHub o atrasava horas (em 15/11 não tinha rodado
+  # até as 11:50) e ele duplicava a coleta: saiu (André, 17/11/2026). Se a
+  # coleta das metas não rodar ou a da láctea falhar, o watchdog dispara esta
+  # de novo. A coleta é idempotente (upsert por loja, dia e sabor).
   workflow_run:
     workflows: ["BIP360 Daily Scraper"]
     types: [completed]
