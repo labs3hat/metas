@@ -1,0 +1,43 @@
+name: Extração avulsa — publicar na planilha e limpar
+
+# Leva o resultado da extração avulsa (run 45595868705) para a planilha do
+# Drive do André, com a conta de serviço do robô, e depois apaga os artifacts
+# e os logs das execuções da extração: o repositório é público e eles têm
+# dado de venda. Não grava no banco. Roda por push neste branch.
+on:
+  push:
+    branches: [claude/extracao-venda-produto-publicar]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install gspread==6.1.2 google-auth==2.29.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: venda-produto-por-loja-mes
+          run-id: 45595868705
+          github-token: ${{ github.token }}
+          path: resultado
+      - name: Gravar na planilha
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python publicar_venda_produto_sheets.py resultado 16VyWoUACtMQ8RZBj9YJ_LpZF6olHdBbTFGicv7xUv7c
+      - name: Apagar artifacts e logs da extração
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for run in 45547420703 45595868705; do
+            for id in $(gh api "repos/${{ github.repository }}/actions/runs/$run/artifacts" --jq '.artifacts[].id'); do
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" && echo "artifact $id apagado"
+            done
+            gh api -X DELETE "repos/${{ github.repository }}/actions/runs/$run/logs" && echo "logs do run $run apagados" || echo "logs do run $run: não apagados"
+          done
