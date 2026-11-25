@@ -138,6 +138,7 @@ def ler_por_produto(caminho: str, coluna: str) -> dict[str, float]:
 
     por_produto: dict[str, float] = {}
     vistas = set()
+    repetidas, soma_repetidas = 0, 0.0
     for r in range(cab + 1, ws.nrows):
         produto = re.sub(r"\s+", " ", str(ws.cell_value(r, c_prod)).strip())
         if not produto or s.normalize(produto) in ("produto", "total", "totais"):
@@ -150,9 +151,16 @@ def ler_por_produto(caminho: str, coluna: str) -> dict[str, float]:
             raise Exception(f'{coluna} inválido em {caminho}, linha {r + 1}: {ws.cell_value(r, c_num)!r}')
         chave = (operador.lower(), produto.lower(), round(n, 4))
         if chave in vistas:
-            continue
+            repetidas += 1
+            soma_repetidas += n
+            if os.environ.get("SOMAR_REPETIDAS") != "1":
+                continue
         vistas.add(chave)
         por_produto[produto] = por_produto.get(produto, 0.0) + n
+    if repetidas:
+        log(f"  {coluna}: {repetidas} linha(s) repetida(s) (mesmo operador, produto e número), "
+            f"somando {soma_repetidas:.2f}; "
+            f"{'somadas' if os.environ.get('SOMAR_REPETIDAS') == '1' else 'descartadas'}")
     return por_produto
 
 

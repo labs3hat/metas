@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DE: "2025-11"
-  ATE: "2026-11-24"
+  DE: "2026-10"
+  ATE: "2026-10-31"
 
 jobs:
   extrair:
@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        loja: [cl2, ctba3, ctba5, ctba7q, ctba11, mga3, mga5, mga7, mga8, mga9, sjp1]
+        loja: [mga3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
