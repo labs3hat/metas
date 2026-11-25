@@ -1,6 +1,6 @@
 name: Extração avulsa — publicar na planilha e limpar
 
-# Leva o resultado da extração avulsa (run 45595868705) para a planilha do
+# Leva o resultado da extração avulsa (run 45617841538, que soma as linhas repetidas) para a planilha do
 # Drive do André, com a conta de serviço do robô, e depois apaga os artifacts
 # e os logs das execuções da extração: o repositório é público e eles têm
 # dado de venda. Não grava no banco. Roda por push neste branch.
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: venda-produto-por-loja-mes
-          run-id: 45595868705
+          run-id: 45617841538
           github-token: ${{ github.token }}
           path: resultado
       - name: Gravar na planilha
@@ -35,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for run in 45547420703 45595868705; do
+          for run in 45616249958 45617841538; do
             for id in $(gh api "repos/${{ github.repository }}/actions/runs/$run/artifacts" --jq '.artifacts[].id'); do
               gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" && echo "artifact $id apagado"
             done
