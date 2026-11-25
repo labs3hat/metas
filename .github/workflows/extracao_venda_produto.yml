@@ -1,0 +1,84 @@
+name: Extração avulsa — venda por produto (precificação)
+
+# AVULSA (André, 25/11/2026): venda por produto do BIP360, mês a mês, para a
+# curva ABC da precificação. Não grava no banco nem na planilha e não muda o
+# robô diário. Roda só quando este branch recebe um push (não está no main).
+# O que extrair fica no env abaixo.
+
+on:
+  push:
+    branches: [claude/extracao-venda-produto]
+
+concurrency:
+  group: bip360-extracao-venda-produto
+  cancel-in-progress: false
+
+env:
+  DE: "2026-10"
+  ATE: "2026-11-24"
+
+jobs:
+  extrair:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        loja: [sjp1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Extrair
+        env:
+          BIP_USER: ${{ secrets.BIP_USER }}
+          BIP_PASS: ${{ secrets.BIP_PASS }}
+          LOJAS: ${{ matrix.loja }}
+          SAIDA: saida
+          DEBUG_DIR: debug
+          DEBUG_STORES: "nenhuma"
+        run: python extracao_venda_produto.py
+      - name: Guardar o resultado da loja
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: venda-produto-${{ matrix.loja }}
+          path: saida/
+          if-no-files-found: warn
+      - name: Guardar prints de diagnóstico
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ matrix.loja }}
+          path: debug/
+          if-no-files-found: ignore
+
+  juntar:
+    needs: extrair
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install openpyxl==3.1.5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: venda-produto-*
+          path: partes
+      - run: python juntar_venda_produto.py partes venda_produto_por_loja_mes
+      - uses: actions/upload-artifact@v4
+        with:
+          name: venda-produto-por-loja-mes
+          path: |
+            venda_produto_por_loja_mes.csv
+            venda_produto_por_loja_mes_situacao.csv
+            venda_produto_por_loja_mes.xlsx
