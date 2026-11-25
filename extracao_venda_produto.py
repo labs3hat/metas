@@ -44,6 +44,10 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 
 import scraper as s  # noqa: E402
 
+# O repositório é público: o log não mostra o texto das telas do BIP (o painel
+# inicial traz o faturamento mensal das lojas). Só aqui; o robô não muda.
+s.print_page_snapshot = lambda *a, **k: None
+
 TZ = ZoneInfo("America/Sao_Paulo")
 
 
@@ -119,8 +123,10 @@ def exportar(page, loja: dict, pasta: str, ini: date, fim: date, indice: str) ->
 def ler_por_produto(caminho: str, coluna: str) -> dict[str, float]:
     """Produto → soma da coluna ("quantidade" ou "valor") de todos os operadores.
 
-    Linha idêntica repetida (mesmo operador, produto e número) entra uma vez,
-    como no robô. Cabeçalho sem a coluna esperada é erro: é o sintoma de
+    Linha repetida (mesmo operador, produto e número) é VENDA de verdade neste
+    relatório mensal: na MGA 3, out/2026, as 23 repetidas do Valor somavam
+    exatamente a diferença para a receita do banco (R$ 974,41). Com
+    SOMAR_REPETIDAS=1 elas entram; sem, são descartadas como no robô diário. Cabeçalho sem a coluna esperada é erro: é o sintoma de
     exportar com o Índice errado.
     """
     wb = s.open_workbook_smart(caminho)
@@ -158,8 +164,7 @@ def ler_por_produto(caminho: str, coluna: str) -> dict[str, float]:
         vistas.add(chave)
         por_produto[produto] = por_produto.get(produto, 0.0) + n
     if repetidas:
-        log(f"  {coluna}: {repetidas} linha(s) repetida(s) (mesmo operador, produto e número), "
-            f"somando {soma_repetidas:.2f}; "
+        log(f"  {coluna}: {repetidas} linha(s) repetida(s) (mesmo operador, produto e número); "
             f"{'somadas' if os.environ.get('SOMAR_REPETIDAS') == '1' else 'descartadas'}")
     return por_produto
 
@@ -230,8 +235,7 @@ def main() -> int:
                             estado, linhas = extrair_mes(page, loja, pasta, ini, fim)
                             vendas.extend((loja["key"], mes, p, q, v) for p, q, v in linhas)
                             situacao.append((loja["key"], mes, estado, len(linhas), ""))
-                            log(f"  {mes}: {estado}, {len(linhas)} produto(s), "
-                                f"qtd {sum(q for _, q, _ in linhas):.0f}, R$ {sum(v for *_, v in linhas):.2f}")
+                            log(f"  {mes}: {estado}, {len(linhas)} produto(s)")
                             break
                         except Exception as e:
                             log(f"  ⚠️ {mes} (tentativa {tentativa}): {e}")
